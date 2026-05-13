@@ -1,0 +1,31 @@
+{
+  "location_hint": "Israel",
+  "role_focus": ["DevOps Manager", "DevOps Director", "Director of DevOps", "Head of DevOps", "VP DevOps", "Platform Engineering Manager", "Director of Platform Engineering"],
+  "serpapi_google_jobs_queries": [
+    "DevOps Director Israel",
+    "DevOps Manager Israel",
+    "Director of DevOps Israel",
+    "Head of DevOps Israel",
+    "VP Engineering Infrastructure Israel",
+    "Platform Engineering Manager Israel",
+    "SRE Manager Israel",
+    "Infrastructure Manager Israel"
+  ],
+  "greenhouse_boards": [
+    "mongodbinc",
+    "duolingo",
+    "figma"
+  ],
+  "lever_sites": [
+    "netlify",
+    "flexport"
+  ],
+  "rss_feeds": [
+    "https://weworkremotely.com/categories/remote-devops-sysadmin-engineering.rss"
+  ],
+  "scoring": {
+    "keywords": ["DevOps", "Platform", "SRE", "Infrastructure", "Cloud", "CI/CD", "Kubernetes", "Terraform"],
+    "seniority": ["Manager", "Director", "Head", "Lead", "VP"],
+    "director_head_bonus": 2
+  }
+}
