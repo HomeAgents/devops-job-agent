@@ -35,37 +35,7 @@
   "location_hint_description_max_chars": 4000,
   "location_hint_aliases": [
     "israel",
-    "ישראל",
-    "tel aviv",
-    "תל אביב",
-    "herzliya",
-    "הרצליה",
-    "ramat gan",
-    "רמת גן",
-    "raanana",
-    "רעננה",
-    "jerusalem",
-    "ירושלים",
-    "haifa",
-    "חיפה",
-    "beer sheva",
-    "באר שבע",
-    "netanya",
-    "נתניה",
-    "rehovot",
-    "רחובות",
-    "holon",
-    "חולון",
-    "bnei brak",
-    "פתח תקווה",
-    "modiin",
-    "מודיעין",
-    "givatayim",
-    "גבעתיים",
-    "kfar saba",
-    "כפר סבא",
-    "hod hasharon",
-    "הוד השרון"
+    "ישראל"
   ],
   "location_filter_source_prefixes": [
     "greenhouse:",
@@ -79,6 +49,8 @@
   "serpapi_hl": "he",
   "serpapi_google_jobs_hl_variants": ["he", "en"],
   "serpapi_location": "Israel",
+  "serpapi_google_jobs_combine_roles_or": true,
+  "serpapi_google_jobs_combined_query_suffix": "Israel",
   "serpapi_google_jobs_queries": [],
   "serpapi_query_template": {
     "roles": [
@@ -92,13 +64,10 @@
       "SRE Manager",
       "Infrastructure Manager",
       "Engineering Manager DevOps",
-      "DevOps Team Lead",
-      "DevOps Lead",
       "מנהל DevOps",
       "מנהלת DevOps",
       "מנהל דבאופס",
       "מנהלת דבאופס",
-      "ראש צוות DevOps",
       "מנהל תשתיות ענן",
       "מנהלת תשתיות ענן",
       "מנהל פלטפורמה",
@@ -109,14 +78,7 @@
       "אחראי DevOps",
       "אחראית DevOps"
     ],
-    "suffixes": [
-      "Israel",
-      "ישראל",
-      "Tel Aviv Israel",
-      "Herzliya Israel",
-      "Jerusalem Israel",
-      "10+ years experience"
-    ]
+    "suffixes": []
   },
   "max_posted_age_days": 30,
   "keep_unknown_posted_age": false,
@@ -140,34 +102,22 @@
       "il.linkedin.com"
     ],
     "role_phrases": [
-      "(\"devops manager\" OR \"devops director\" OR \"head of devops\" OR \"director of devops\")",
-      "(\"engineering manager devops\" OR \"devops team lead\" OR \"lead devops\")",
-      "(מנהל DevOps OR מנהלת DevOps OR \"מנהל דבאופס\" OR \"ראש צוות DevOps\")"
+      "(\"devops manager\" OR \"devops director\" OR \"head of devops\" OR \"director of devops\" OR \"vp devops\")",
+      "(\"engineering manager devops\")",
+      "(מנהל devops OR מנהלת devops OR \"מנהל דבאופס\")"
     ],
     "geo_suffixes": [
-      "Israel",
-      "ישראל",
-      "Tel Aviv",
-      "תל אביב",
-      "Herzliya",
-      "Ramat Gan",
-      "Jerusalem",
-      "Haifa",
-      "hybrid",
-      "remote"
+      "Israel"
     ],
+    "geo_suffixes_israel_only": true,
+    "combine_role_phrases_or": true,
     "after_days_ago": 35,
     "after_date_buffer_days": 5,
     "omit_after_clause": false,
     "extra_query_templates": [
-      "site:il.linkedin.com/jobs \"DevOps Manager\" Israel{after}",
-      "site:il.linkedin.com/jobs \"DevOps Director\" Israel{after}",
-      "site:il.linkedin.com/jobs \"מנהל DevOps\" Israel{after}",
-      "site:linkedin.com/jobs/view \"DevOps Manager\" {geo}{after}",
-      "site:linkedin.com/jobs/view \"DevOps Director\" {geo}{after}",
-      "site:linkedin.com/jobs/view \"מנהל DevOps\" {geo}{after}",
-      "site:il.linkedin.com/jobs \"DevOps Manager\" {geo}{after}",
-      "site:apply.workable.com \"Israel\" (\"DevOps Manager\" OR \"DevOps Director\" OR \"Head of DevOps\"){after}"
+      "site:il.linkedin.com/jobs (\"devops manager\" OR \"devops director\" OR \"מנהל devops\") Israel{after}",
+      "site:linkedin.com/jobs/view (\"devops manager\" OR \"devops director\" OR \"מנהל devops\") Israel{after}",
+      "site:apply.workable.com \"Israel\" (\"devops manager\" OR \"devops director\" OR \"head of devops\"){after}"
     ],
     "max_queries": 48,
     "num": 18,
@@ -199,7 +149,7 @@
   "lever_sites": [],
   "rss_feeds": [],
   "rss_feeds_israel_host_substrings": [],
-  "israel_job_discovery_notes": "Default sources: SerpAPI Google Jobs (serpapi_location=Israel) + Google site search for il.linkedin.com / LinkedIn + Workable Israel. Requires SERPAPI_KEY in .env. Add rss_feeds (AllJobs/Jobnet/Drushim HTTPS RSS) for Israeli boards; *.co.il feed hosts get Location=Israel in code. No --test-email; use dry-run to preview. Global Greenhouse/Lever boards removed — add only Israel-relevant slugs if you use them.",
+  "israel_job_discovery_notes": "SerpAPI Google Jobs and ATS web q strings use Google-style booleans: quoted phrases joined with OR (English lowercased inside quotes; Hebrew kept). Jobs q ends with israel; serpapi_location still set. Post-filter: location_hint_aliases israel / ישראל only. SERPAPI_KEY required.",
   "excel_sheet_names": {
     "top_jobs": "Top Jobs",
     "all_jobs": "All Jobs",

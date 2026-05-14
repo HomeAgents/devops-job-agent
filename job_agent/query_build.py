@@ -2,8 +2,104 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from typing import Any, Dict, List
+
+# Removed from any built query string (config can reintroduce; we strip again).
+_FORBIDDEN_QUERY_SNIPPETS: tuple[str, ...] = (
+    "10+ years experience",
+    "10 + years experience",
+    "10+ years of experience",
+)
+
+
+def _scrub_forbidden_query_snippets(q: str) -> str:
+    s = q
+    for frag in _FORBIDDEN_QUERY_SNIPPETS:
+        s = re.sub(re.escape(frag), " ", s, flags=re.IGNORECASE)
+    return " ".join(s.split()).strip()
+
+
+def _drop_list_entries_matching_forbidden(items: List[str]) -> List[str]:
+    """Drop geo/suffix lines whose sole purpose is seniority wording we do not search for."""
+    out: List[str] = []
+    for x in items:
+        if not x:
+            continue
+        low = x.lower()
+        if any(frag.lower() in low for frag in _FORBIDDEN_QUERY_SNIPPETS):
+            continue
+        out.append(x)
+    return out
+
+
+def _finalize_query_list(queries: List[str]) -> List[str]:
+    seen: set[str] = set()
+    out: List[str] = []
+    for q in queries:
+        s = _scrub_forbidden_query_snippets(q)
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+# Hebrew letters — keep original casing for these phrases (Latin fragments may still be lowercased per term).
+_HEBREW_RE = re.compile(r"[\u0590-\u05FF]")
+
+
+def _quote_google_boolean_term(term: str) -> str:
+    """One double-quoted token for Google-style boolean ``q`` (internal ``\"`` escaped)."""
+    t = (term or "").strip()
+    if not t:
+        return ""
+    if not _HEBREW_RE.search(t):
+        t = t.lower()
+    t = t.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{t}"'
+
+
+def _boolean_or_quoted_phrases(phrases: List[str]) -> str:
+    """``"a" OR "b" OR "c"`` — deduped, English/Latin phrases lowercased."""
+    bits: list[str] = []
+    seen: set[str] = set()
+    for p in phrases:
+        q = _quote_google_boolean_term(p)
+        if not q or q in seen:
+            continue
+        seen.add(q)
+        bits.append(q)
+    return " OR ".join(bits)
+
+
+def _serpapi_jobs_geo_tail(cfg: Dict[str, Any]) -> str:
+    suf = (cfg.get("serpapi_google_jobs_combined_query_suffix") or "").strip()
+    if not suf:
+        suf = (cfg.get("serpapi_location") or "").strip()
+    if not suf:
+        suf = "Israel"
+    return suf.lower()
+
+
+def _effective_ats_geo_suffixes(geos: List[str], b: Dict[str, Any]) -> List[str]:
+    """Use a single country token ``Israel`` in ``q`` when enabled (no city names in geo text)."""
+    if b.get("geo_suffixes_israel_only", True):
+        return ["Israel"]
+    out = _drop_list_entries_matching_forbidden(geos)
+    if not out:
+        return ["Israel"]
+    return out
+
+
+def _combine_ats_role_phrases_or(role_phrases: List[str]) -> List[str]:
+    """One OR-joined clause for all role blocks (fewer SerpAPI ``engine=google`` calls)."""
+    parts = [p.strip() for p in role_phrases if p.strip()]
+    if len(parts) <= 1:
+        return parts
+    return [" OR ".join(parts)]
+
 
 DEFAULT_ATS_SITE_HOSTS = (
     "comeet.co",
@@ -19,22 +115,22 @@ DEFAULT_ATS_SITE_HOSTS = (
 # Extra OR-blocks prepended to ``role_phrases`` (Google ``site:`` / ATS web search).
 BUILTIN_DEVOPS_OR_BLOCKS = (
     '("devops manager" OR "devops director" OR "head of devops" OR "director of devops" OR "vp devops")',
-    '("engineering manager devops" OR "devops team lead" OR "lead devops" OR "devops lead")',
+    '("engineering manager devops")',
     '("platform engineering manager" OR "director of platform engineering" OR "head of platform engineering")',
     '("sre manager" OR "site reliability manager" OR "infrastructure manager" OR "cloud operations manager")',
-    '(מנהל DevOps OR מנהלת DevOps OR "מנהל דבאופס" OR "מנהלת דבאופס" OR "אחראי DevOps" OR "אחראית DevOps")',
-    '(ראש צוות DevOps OR "ראש צוות דבאופס" OR "מוביל DevOps" OR "מובילת DevOps")',
+    '(מנהל devops OR מנהלת devops OR "מנהל דבאופס" OR "מנהלת דבאופס" OR "אחראי devops" OR "אחראית devops")',
     '("מנהל תשתיות ענן" OR "מנהלת תשתיות ענן" OR "מנהל פלטפורמה" OR "מנהלת פלטפורמה" OR "מנהל תפעול ענן")',
     '("מנהל CI/CD" OR "מנהל Kubernetes" OR "מנהל אוטומציה" OR "מנהל SRE" OR "מנהלת SRE")',
 )
 
 DEFAULT_ATS_ROLE_PHRASES = (
-    '("devops manager" OR "devops director" OR "head of devops")',
+    '("devops manager" OR "devops director" OR "head of devops" OR "director of devops" OR "vp devops")',
     '("platform engineering manager" OR "director of devops" OR "vp devops")',
-    "(מנהל DevOps OR מנהלת DevOps OR \"מנהל דבאופס\")",
+    "(מנהל devops OR מנהלת devops OR \"מנהל דבאופס\")",
 )
 
-DEFAULT_ATS_GEO_SUFFIXES = ("Israel", "Tel Aviv", "ישראל")
+# Default when ``geo_suffixes`` is unset: country-level only (no city-specific web queries).
+DEFAULT_ATS_GEO_SUFFIXES = ("Israel",)
 
 # פירוט-style Google patterns (DevOps/Israel; placeholders expanded at runtime).
 # LinkedIn: organic links to ``/jobs/view/`` are ingested when URL filter matches.
@@ -42,9 +138,8 @@ DEFAULT_EXTRA_QUERY_TEMPLATES = (
     'site:www.comeet.com/jobs {roles_core} {geo}{after}',
     "site:myworkdayjobs.com {roles_core} {geo}{after}",
     "site:apply.workable.com {roles_core} {geo}{after}",
-    'site:job-boards.greenhouse.io "Tel Aviv" {roles_core}{after}',
+    "site:job-boards.greenhouse.io {geo} {roles_core}{after}",
     'site:apply.workable.com {geo} {roles_wide}{after}',
-    'site:job-boards.greenhouse.io {geo} {roles_core}{after}',
     "site:linkedin.com/jobs/view {roles_core} {geo}{after}",
     "site:il.linkedin.com/jobs {roles_core} {geo}{after}",
     'site:linkedin.com/jobs {roles_wide} {geo}{after}',
@@ -52,31 +147,53 @@ DEFAULT_EXTRA_QUERY_TEMPLATES = (
 
 
 def build_serpapi_queries(cfg: Dict[str, Any]) -> List[str]:
-    """Prefer explicit ``serpapi_google_jobs_queries``; else expand ``serpapi_query_template``."""
+    """Prefer explicit ``serpapi_google_jobs_queries``; else expand ``serpapi_query_template``.
+
+    Combined and no-suffix modes emit one boolean ``q``: ``"role1" OR "role2" …`` plus a
+    trailing geography token (``serpapi_google_jobs_combined_query_suffix`` / ``serpapi_location``).
+    Latin phrases are lowercased; Hebrew-heavy titles keep original casing inside quotes.
+    """
     explicit = cfg.get("serpapi_google_jobs_queries")
     if isinstance(explicit, list) and len(explicit) > 0:
-        return [str(q).strip() for q in explicit if str(q).strip()]
+        return _finalize_query_list([str(q).strip() for q in explicit if str(q).strip()])
 
     tpl = cfg.get("serpapi_query_template")
     if not isinstance(tpl, dict):
         return []
 
     roles = [str(r).strip() for r in (tpl.get("roles") or []) if str(r).strip()]
-    suffixes = [str(s).strip() for s in (tpl.get("suffixes") or []) if str(s).strip()]
+    suffixes = _drop_list_entries_matching_forbidden(
+        [str(s).strip() for s in (tpl.get("suffixes") or []) if str(s).strip()]
+    )
     if not roles:
         return []
+
+    if cfg.get("serpapi_google_jobs_combine_roles_or"):
+        core = _boolean_or_quoted_phrases(roles)
+        if not core:
+            return []
+        tail = _serpapi_jobs_geo_tail(cfg)
+        return _finalize_query_list([f"{core} {tail}".strip()])
+
     if not suffixes:
-        return roles
+        core = _boolean_or_quoted_phrases(roles)
+        if not core:
+            return []
+        tail = _serpapi_jobs_geo_tail(cfg)
+        return _finalize_query_list([f"{core} {tail}".strip()])
 
     seen: set[str] = set()
     out: List[str] = []
     for role in roles:
         for suf in suffixes:
-            q = f"{role} {suf}".strip()
-            if q not in seen:
-                seen.add(q)
-                out.append(q)
-    return out
+            rt = _quote_google_boolean_term(role)
+            st = suf.strip().lower()
+            q = _scrub_forbidden_query_snippets(f"{rt} {st}".strip())
+            if not q or q in seen:
+                continue
+            seen.add(q)
+            out.append(q)
+    return _finalize_query_list(out)
 
 
 def _roles_core_wide(role_phrases: List[str]) -> tuple[str, str]:
@@ -124,7 +241,7 @@ def _expand_extra_query_templates(
                 .replace("{roles_wide}", roles_wide)
                 .replace("{geo}", geo)
             )
-            q = " ".join(q.split()).strip()
+            q = _scrub_forbidden_query_snippets(" ".join(q.split()).strip())
             if q and q not in seen:
                 seen.add(q)
                 out.append(q)
@@ -178,8 +295,9 @@ def build_ats_google_site_queries(cfg: Dict[str, Any]) -> List[str]:
         tpl = cfg.get("serpapi_query_template")
         if isinstance(tpl, dict):
             roles = [str(r).strip() for r in (tpl.get("roles") or []) if str(r).strip()][:12]
-            if len(roles) >= 2:
-                orq = "(" + " OR ".join(f'"{r}"' for r in roles) + ")"
+            core = _boolean_or_quoted_phrases(roles)
+            if core:
+                orq = f"({core})"
                 if orq not in role_phrases:
                     role_phrases = list(role_phrases) + [orq]
 
@@ -187,7 +305,11 @@ def build_ats_google_site_queries(cfg: Dict[str, Any]) -> List[str]:
     if not isinstance(geos, list) or not geos:
         geos = list(DEFAULT_ATS_GEO_SUFFIXES)
     else:
-        geos = [str(x).strip() for x in geos if str(x).strip()]
+        geos = _drop_list_entries_matching_forbidden([str(x).strip() for x in geos if str(x).strip()])
+    geos = _effective_ats_geo_suffixes(geos, b)
+
+    if b.get("combine_role_phrases_or", True):
+        role_phrases = _combine_ats_role_phrases_or(role_phrases)
 
     days = int(b.get("after_days_ago", 30) or 30)
     buffer = int(b.get("after_date_buffer_days", 5) or 0)
@@ -207,11 +329,12 @@ def build_ats_google_site_queries(cfg: Dict[str, Any]) -> List[str]:
         host = host.lstrip("@").strip()
         for rp in role_phrases:
             for geo in geos:
-                q = f"site:{host} {rp} {geo}{after_clause}".strip()
-                if q not in seen:
+                q = _scrub_forbidden_query_snippets(f"site:{host} {rp} {geo}{after_clause}".strip())
+                if q and q not in seen:
                     seen.add(q)
                     out.append(q)
 
+    out = _finalize_query_list(out)
     max_q = int(b.get("max_queries", 0) or 0)
     if max_q > 0:
         out = out[:max_q]

@@ -194,7 +194,7 @@ def print_all_queries(cfg: Dict[str, Any]) -> None:
     print("=== SerpAPI Google Jobs (engine=google_jobs) — string used as parameter \"q\" ===")
     print("(Runs only when serpapi_features.google_jobs is true.)\n")
     if not gj:
-        print("  (none — check serpapi_google_jobs_queries or serpapi_query_template.roles/suffixes.)\n")
+        print("  (none — check serpapi_google_jobs_queries, serpapi_query_template.roles, or serpapi_google_jobs_combine_roles_or.)\n")
     else:
         for i, q in enumerate(gj, 1):
             print(f"  {i:4d}  {q}")
