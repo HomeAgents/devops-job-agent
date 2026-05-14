@@ -36,10 +36,14 @@ def load_config(path: Path) -> Dict[str, Any]:
 
 
 def filter_jobs_by_location_hint(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
-    """For global boards (Greenhouse/Lever/RSS), keep rows that mention location_hint.
+    """Keep rows whose title, location, or company mentions Israel (or aliases).
 
-    SerpAPI Google Jobs rows are not filtered here — geography is applied via SerpAPI
-    ``location`` / ``gl`` / ``google_domain`` in ``google_jobs.py``.
+    Applies to sources listed in ``location_filter_source_prefixes`` (by default
+    Greenhouse, Lever, RSS; config also includes ``serpapi_`` and ``google_site_ats:``
+    for Israel-only across those feeds).
+
+    SerpAPI Google Jobs is still scoped by ``serpapi_location`` / ``gl`` in
+    ``google_jobs.py``; this filter is an additional text guard on returned rows.
     """
     if not cfg.get("filter_jobs_by_location_hint", False):
         return jobs
@@ -194,7 +198,14 @@ def run(argv: List[str] | None = None) -> int:
         jobs = collect_all(cfg, only)
         jobs = filter_jobs_by_location_hint(jobs, cfg)
         if not jobs:
-            print("No jobs fetched from any source.")
+            if cfg.get("filter_jobs_by_location_hint", False):
+                print(
+                    "No jobs left after Israel / location_hint filter "
+                    "(title, location, or company must mention location_hint or an alias).",
+                    file=sys.stderr,
+                )
+            else:
+                print("No jobs fetched from any source.")
             return 0
         jobs = apply_job_filters(jobs, cfg)
         annotate_search_fallback_for_blocked_domains(jobs, cfg)
