@@ -137,6 +137,11 @@ def run(argv: List[str] | None = None) -> int:
         help="Fetch + build Excel; do not write jobs.db or send email",
     )
     parser.add_argument(
+        "--test-email",
+        action="store_true",
+        help="Send one sample HTML digest to EMAIL_TO (no job fetch, no DB); checks Gmail SMTP config",
+    )
+    parser.add_argument(
         "--skip-contacts",
         action="store_true",
         help="Skip SerpAPI Google search for LinkedIn profiles",
@@ -156,6 +161,32 @@ def run(argv: List[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
+
+    if args.test_email:
+        sample = pd.DataFrame(
+            [
+                {
+                    "Job Title": "DevOps Director — sample row (email layout test)",
+                    "Company": "Example Corp",
+                    "Link": "https://example.com/careers/sample",
+                    "Source": "test-email",
+                    "Location": "Remote",
+                    "Score": 99,
+                }
+            ]
+        )
+        send_digest_email(
+            sample,
+            pd.DataFrame(),
+            cfg,
+            network_df=pd.DataFrame(),
+            attach_excel=False,
+            excel_path=None,
+            subject="Job Agent — HTML digest test (sample only)",
+        )
+        print("Sent test digest email (check inbox).")
+        return 0
+
     only = parse_sources_arg(args.sources or None)
 
     conn = db.connect(args.db)

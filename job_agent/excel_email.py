@@ -242,6 +242,7 @@ def send_digest_email(
     network_df: Optional[pd.DataFrame] = None,
     attach_excel: bool = False,
     excel_path: Optional[Path] = None,
+    subject: Optional[str] = None,
 ) -> None:
     """Send multipart digest: plain text + HTML table in body; optional .xlsx attachment."""
     cfg = cfg or {}
@@ -269,7 +270,7 @@ def send_digest_email(
     html_body = _build_digest_html(jobs_df, contacts_df, net, cfg)
 
     msg = EmailMessage()
-    msg["Subject"] = "DevOps Manager/Director roles — digest"
+    msg["Subject"] = (subject or "").strip() or "DevOps Manager/Director roles — digest"
     msg["From"] = formataddr((display, email_user))
     msg["To"] = email_to
     msg.set_content(plain)
