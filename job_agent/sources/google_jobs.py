@@ -33,11 +33,23 @@ def _serpapi_google_jobs_retry(params: dict) -> dict:
             msg = str(e)
             if "401" in msg or "403" in msg or "Invalid API key" in msg:
                 raise
+            if _is_no_jobs_for_query(msg):
+                raise
             last = e
             if attempt < 2:
                 time.sleep(min(30, 2 ** (attempt + 1)))
     assert last is not None
     raise last
+
+
+def _is_no_jobs_for_query(msg: str) -> bool:
+    """SerpAPI returns HTTP 200 + error field when Google has no hits — not a fatal key failure."""
+    m = msg.lower()
+    return (
+        "hasn't returned any results" in m
+        or "has not returned any results" in m
+        or "no results for this query" in m
+    )
 
 
 def fetch_google_jobs(queries: List[str], cfg: Dict[str, Any]) -> List[Job]:
@@ -61,6 +73,9 @@ def fetch_google_jobs(queries: List[str], cfg: Dict[str, Any]) -> List[Job]:
                     file=sys.stderr,
                 )
                 return []
+            if _is_no_jobs_for_query(msg):
+                print(f"SerpAPI Google Jobs: no results for query {q!r} — skipping.", file=sys.stderr)
+                continue
             raise
 
         for job in data.get("jobs_results") or []:
