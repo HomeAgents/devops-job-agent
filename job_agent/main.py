@@ -44,6 +44,11 @@ def filter_jobs_by_location_hint(jobs: List[Job], cfg: Dict[str, Any]) -> List[J
 
     SerpAPI Google Jobs is still scoped by ``serpapi_location`` / ``gl`` in
     ``google_jobs.py``; this filter is an additional text guard on returned rows.
+
+    When ``location_hint_include_job_description`` is true, the first
+    ``location_hint_description_max_chars`` characters of each job's description
+    text (from ``Job.raw["text"]``) are also searched for aliases — useful when
+    Israel / remote-IL appears only in the body, not in the Greenhouse location line.
     """
     if not cfg.get("filter_jobs_by_location_hint", False):
         return jobs
@@ -64,6 +69,12 @@ def filter_jobs_by_location_hint(jobs: List[Job], cfg: Dict[str, Any]) -> List[J
         if t and t not in aliases:
             aliases.append(t)
     out: List[Job] = []
+    include_desc = bool(cfg.get("location_hint_include_job_description", False))
+    desc_cap = int(cfg.get("location_hint_description_max_chars") or 4000)
+    if desc_cap < 500:
+        desc_cap = 500
+    if desc_cap > 50000:
+        desc_cap = 50000
     for j in jobs:
         sl = j.source.lower()
         if not any(sl.startswith(p) for p in prefixes):
@@ -72,6 +83,13 @@ def filter_jobs_by_location_hint(jobs: List[Job], cfg: Dict[str, Any]) -> List[J
         blob = f"{j.location} {j.title} {j.company}".lower()
         if any(a in blob for a in aliases):
             out.append(j)
+            continue
+        if include_desc and isinstance(j.raw, dict):
+            txt = str(j.raw.get("text") or "")
+            if txt:
+                blob2 = txt[:desc_cap].lower()
+                if any(a in blob2 for a in aliases):
+                    out.append(j)
     return out
 
 

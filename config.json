@@ -7,6 +7,12 @@
   },
   "email_from_display_name": "Job Agent",
   "email_attach_excel": false,
+  "email_table_headers": {
+    "Link": "Job link / URL"
+  },
+  "excel_column_labels": {
+    "Link": "Job link / URL"
+  },
   "network": {
     "linkedin_connections_csv": ""
   },
@@ -22,7 +28,9 @@
     ]
   },
   "location_hint": "Israel",
-  "filter_jobs_by_location_hint": false,
+  "filter_jobs_by_location_hint": true,
+  "location_hint_include_job_description": true,
+  "location_hint_description_max_chars": 4000,
   "location_hint_aliases": [
     "israel",
     "ישראל",
@@ -57,7 +65,13 @@
     "hod hasharon",
     "הוד השרון"
   ],
-  "location_filter_source_prefixes": ["greenhouse:", "lever:", "rss:"],
+  "location_filter_source_prefixes": [
+    "greenhouse:",
+    "lever:",
+    "rss:",
+    "serpapi_",
+    "google_site_ats:"
+  ],
   "serpapi_google_domain": "google.co.il",
   "serpapi_gl": "il",
   "serpapi_hl": "en",

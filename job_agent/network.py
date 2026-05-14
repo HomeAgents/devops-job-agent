@@ -128,6 +128,10 @@ def match_network_to_jobs(jobs: Iterable[Job], connections: List[Dict[str, str]]
                     "Company": job.company,
                     "Job Link": job.link,
                     "Connection": c["name"],
+                    "Network relation": (
+                        "Your LinkedIn 1st-degree connection (from Connections export). "
+                        f"Employer in export «{c['connection_company']}» matches the job posting company «{jc}»."
+                    ),
                     "Their company (export)": c["connection_company"],
                     "Their role": c["position"],
                     "Profile": c["profile_url"],

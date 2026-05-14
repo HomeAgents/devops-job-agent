@@ -1,12 +1,45 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 import requests
 
 from job_agent.models import Job
 from job_agent.scoring import score_title
 from job_agent.util import normalize_url, strip_html
+
+
+def _greenhouse_location(job: Dict[str, Any]) -> str:
+    """Human-readable location from Greenhouse job JSON (often multiple offices)."""
+    raw_loc = job.get("location")
+    if isinstance(raw_loc, str) and raw_loc.strip():
+        return raw_loc.strip()
+    if isinstance(raw_loc, dict):
+        n = (raw_loc.get("name") or "").strip()
+        if n:
+            return n
+    offices: Union[List[Any], Dict[str, Any], None] = job.get("offices")
+    names: List[str] = []
+    if isinstance(offices, dict):
+        offices = [offices]
+    if isinstance(offices, list):
+        for item in offices:
+            if isinstance(item, dict):
+                nm = (item.get("name") or "").strip()
+                if nm:
+                    names.append(nm)
+            elif item:
+                names.append(str(item).strip())
+    if names:
+        seen: set[str] = set()
+        uniq = []
+        for n in names:
+            low = n.lower()
+            if low not in seen:
+                seen.add(low)
+                uniq.append(n)
+        return " • ".join(uniq)
+    return ""
 
 
 def fetch_greenhouse(boards: List[str], cfg: Dict[str, Any]) -> List[Job]:
@@ -34,7 +67,28 @@ def fetch_greenhouse(boards: List[str], cfg: Dict[str, Any]) -> List[Job]:
             if not title:
                 continue
             tlow = title.lower()
-            if not any(x in tlow for x in ("devops", "platform", "sre", "infrastructure", "infra", "engineering manager", "cloud")):
+            # Avoid matching "Product Manager, AI Platform" on bare substring "platform".
+            role_signals = (
+                "devops",
+                "site reliability",
+                " sre",
+                "sre ",
+                "sre,",
+                "sre/",
+                "infrastructure",
+                "infra ",
+                "platform engineering",
+                "platform engineer",
+                "head of platform",
+                "director of platform",
+                "vp of platform",
+                "engineering manager",
+                "engineering lead",
+                "cloud infrastructure",
+                "kubernetes",
+                "terraform",
+            )
+            if not any(x in tlow for x in role_signals):
                 continue
             if not any(x in tlow for x in ("manager", "director", "head", "lead", "vp", "vice")):
                 continue
@@ -45,12 +99,7 @@ def fetch_greenhouse(boards: List[str], cfg: Dict[str, Any]) -> List[Job]:
             if link_n in seen:
                 continue
             seen.add(link_n)
-            loc = ""
-            locs = job.get("location") or job.get("offices")
-            if isinstance(locs, dict):
-                loc = locs.get("name", "")
-            elif isinstance(locs, list) and locs:
-                loc = str(locs[0].get("name", "") if isinstance(locs[0], dict) else locs[0])
+            loc = _greenhouse_location(job)
             updated = str(job.get("updated_at", "") or "").strip()
             posted = updated if updated else "recent"
             desc_text = strip_html(str(job.get("content", "") or ""))

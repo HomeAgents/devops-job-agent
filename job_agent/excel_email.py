@@ -24,7 +24,7 @@ _EMAIL_JOB_COLUMNS: Sequence[str] = (
 _DEFAULT_EMAIL_HEADERS: Dict[str, str] = {
     "Job Title": "Job title",
     "Company": "Company",
-    "Link": "Apply link",
+    "Link": "Job link / URL",
     "Source": "Source",
     "Location": "Location",
 }
@@ -49,6 +49,17 @@ def _email_table_headers(cfg: Dict[str, Any]) -> Dict[str, str]:
     return dict(_DEFAULT_EMAIL_HEADERS)
 
 
+def _jobs_email_headers(cfg: Dict[str, Any]) -> Dict[str, str]:
+    """Display names for the digest jobs table only (does not rename DataFrame columns)."""
+    headers = _email_table_headers(cfg)
+    excel = cfg.get("excel_column_labels")
+    if isinstance(excel, dict):
+        for k in _EMAIL_JOB_COLUMNS:
+            if k in excel and str(excel[k]).strip():
+                headers[k] = str(excel[k]).strip()
+    return headers
+
+
 def _df_to_html_table(
     df: pd.DataFrame,
     columns: Sequence[str],
@@ -68,7 +79,9 @@ def _df_to_html_table(
             val = row.get(c, "")
             s = "" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
             if c == "Link" and s.startswith("http"):
-                cells.append(f'<td><a href="{esc(s, quote=True)}">Apply</a></td>')
+                cells.append(
+                    f'<td style="word-break:break-all;"><a href="{esc(s, quote=True)}">{esc(s)}</a></td>'
+                )
             else:
                 cells.append(f"<td>{esc(s)}</td>")
         trs.append("<tr>" + "".join(cells) + "</tr>")
@@ -85,6 +98,7 @@ def _network_html_table(df: pd.DataFrame) -> str:
         c
         for c in (
             "Connection",
+            "Network relation",
             "Their company (export)",
             "Their role",
             "Company",
@@ -105,8 +119,9 @@ def _network_html_table(df: pd.DataFrame) -> str:
             val = row.get(c, "")
             s = "" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
             if c in ("Job Link", "Profile") and s.startswith("http"):
-                label = "Job" if c == "Job Link" else "Profile"
-                cells.append(f'<td><a href="{esc(s, quote=True)}">{esc(label)}</a></td>')
+                cells.append(
+                    f'<td style="word-break:break-all;"><a href="{esc(s, quote=True)}">{esc(s)}</a></td>'
+                )
             else:
                 cells.append(f"<td>{esc(s)}</td>")
         trs.append("<tr>" + "".join(cells) + "</tr>")
@@ -137,8 +152,9 @@ def _contacts_html_table(df: pd.DataFrame) -> str:
             val = row.get(c, "")
             s = "" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
             if c in ("Job Link", "LinkedIn Profile") and s.startswith("http"):
-                label = "Job" if c == "Job Link" else "Profile"
-                cells.append(f'<td><a href="{esc(s, quote=True)}">{esc(label)}</a></td>')
+                cells.append(
+                    f'<td style="word-break:break-all;"><a href="{esc(s, quote=True)}">{esc(s)}</a></td>'
+                )
             else:
                 cells.append(f"<td>{esc(s)}</td>")
         trs.append("<tr>" + "".join(cells) + "</tr>")
@@ -155,8 +171,9 @@ def _build_digest_html(
     network_df: pd.DataFrame,
     cfg: Dict[str, Any],
 ) -> str:
-    jobs_view = _rename_job_columns(jobs_df, cfg)
-    headers = _email_table_headers(cfg)
+    # Keep canonical column names (Link, etc.); excel_column_labels is for Excel sheets
+    # and for <th> text here only — renaming the frame would drop the Link column.
+    headers = _jobs_email_headers(cfg)
     intro = (
         "<p style=\"font-family:sans-serif;font-size:14px;\">"
         "New DevOps leadership roles (aggregated from configured sources). "
@@ -164,7 +181,7 @@ def _build_digest_html(
         "there is no numeric score column in this email."
         "</p>"
     )
-    jobs_table = _df_to_html_table(jobs_view, _EMAIL_JOB_COLUMNS, headers)
+    jobs_table = _df_to_html_table(jobs_df, _EMAIL_JOB_COLUMNS, headers)
     network_block = _network_html_table(network_df)
     contacts_block = _contacts_html_table(contacts_df)
     return (
