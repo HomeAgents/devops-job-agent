@@ -5,7 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Tuple
 
 import pandas as pd
 
@@ -108,15 +108,21 @@ def _strip_disabled_serpapi_sources(cfg: Dict[str, Any], only: Set[str]) -> Set[
     return out if out else None
 
 
-def collect_all(cfg: Dict[str, Any], only: Set[str] | None) -> List[Job]:
+def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[List[Job], List[Dict[str, Any]]]:
+    """Fetch from all enabled sources; return jobs and one stats row per site/feed queried."""
     jobs: List[Job] = []
     seen: Set[str] = set()
+    stats: List[Dict[str, Any]] = []
 
-    def add_many(new: List[Job]) -> None:
+    def add_many(new: List[Job], site_label: str) -> None:
+        fetched = len(new)
+        added_here = 0
         for j in new:
             if j.link not in seen:
                 seen.add(j.link)
                 jobs.append(j)
+                added_here += 1
+        stats.append({"Site": site_label, "Fetched": fetched, "Unique added": added_here})
 
     if only:
         only = _strip_disabled_serpapi_sources(cfg, only)
@@ -124,23 +130,41 @@ def collect_all(cfg: Dict[str, Any], only: Set[str] | None) -> List[Job]:
             only = None
 
     if serpapi_feature_enabled("google_jobs", cfg) and (only is None or "serpapi" in only or "google_jobs" in only):
-        add_many(fetch_google_jobs(build_serpapi_queries(cfg), cfg))
+        batch = fetch_google_jobs(build_serpapi_queries(cfg), cfg)
+        add_many(batch, "SerpAPI: Google Jobs")
 
     if serpapi_feature_enabled("google_site_ats", cfg) and (
         only is None or "google_site_ats" in only or "ats_google" in only
     ):
-        add_many(fetch_google_site_ats(build_ats_google_site_queries(cfg), cfg))
+        batch = fetch_google_site_ats(build_ats_google_site_queries(cfg), cfg)
+        add_many(batch, "SerpAPI: Google web (site: ATS / LinkedIn)")
 
     if only is None or "greenhouse" in only:
-        add_many(fetch_greenhouse(cfg.get("greenhouse_boards") or [], cfg))
+        for board in cfg.get("greenhouse_boards") or []:
+            b = str(board or "").strip()
+            if not b:
+                continue
+            batch = fetch_greenhouse([b], cfg)
+            add_many(batch, f"Greenhouse: {b}")
 
     if only is None or "lever" in only:
-        add_many(fetch_lever(cfg.get("lever_sites") or [], cfg))
+        for site in cfg.get("lever_sites") or []:
+            s = str(site or "").strip()
+            if not s:
+                continue
+            batch = fetch_lever([s], cfg)
+            add_many(batch, f"Lever: {s}")
 
     if only is None or "rss" in only:
-        add_many(fetch_rss_jobs(cfg.get("rss_feeds") or [], cfg))
+        for feed in cfg.get("rss_feeds") or []:
+            u = str(feed or "").strip()
+            if not u:
+                continue
+            batch = fetch_rss_jobs([u], cfg)
+            label = u if len(u) <= 96 else u[:93] + "..."
+            add_many(batch, f"RSS: {label}")
 
-    return jobs
+    return jobs, stats
 
 
 def run(argv: List[str] | None = None) -> int:
@@ -202,6 +226,13 @@ def run(argv: List[str] | None = None) -> int:
             pd.DataFrame(),
             cfg,
             network_df=pd.DataFrame(),
+            fetch_stats_df=pd.DataFrame(
+                [
+                    {"Site": "Greenhouse: example-board", "Fetched": 12, "Unique added": 12},
+                    {"Site": "Lever: example", "Fetched": 0, "Unique added": 0},
+                ]
+            ),
+            digest_by_source_df=pd.DataFrame([{"Source": "test-email", "New in this email": 1}]),
             attach_excel=False,
             excel_path=None,
             subject="Job Agent — HTML digest test (sample only)",
@@ -213,9 +244,13 @@ def run(argv: List[str] | None = None) -> int:
 
     conn = db.connect(args.db)
     try:
-        jobs = collect_all(cfg, only)
+        jobs, fetch_stats_rows = collect_all_with_stats(cfg, only)
+        fetch_stats_df = pd.DataFrame(fetch_stats_rows)
         jobs = filter_jobs_by_location_hint(jobs, cfg)
         if not jobs:
+            if not fetch_stats_df.empty:
+                print("\nSources checked (raw fetch counts):", file=sys.stderr)
+                print(fetch_stats_df.to_string(index=False), file=sys.stderr)
             if cfg.get("filter_jobs_by_location_hint", False):
                 print(
                     "No jobs left after Israel / location_hint filter "
@@ -229,16 +264,28 @@ def run(argv: List[str] | None = None) -> int:
         annotate_search_fallback_for_blocked_domains(jobs, cfg)
         if not jobs:
             print("No jobs after age/closed posting filters.")
+            if not fetch_stats_df.empty:
+                print("\nSources checked (raw fetch counts):", file=sys.stderr)
+                print(fetch_stats_df.to_string(index=False), file=sys.stderr)
             return 0
 
         existing = db.existing_links(conn)
         new_jobs = [j for j in jobs if j.link not in existing]
         if not new_jobs:
             print("No new jobs (all links already in jobs.db).")
+            if not fetch_stats_df.empty:
+                print("\nSources checked (raw fetch counts):", file=sys.stderr)
+                print(fetch_stats_df.to_string(index=False), file=sys.stderr)
             return 0
 
         rows = [j.as_row() for j in new_jobs]
         df = pd.DataFrame(rows)
+        by_src: Dict[str, int] = {}
+        for j in new_jobs:
+            by_src[j.source] = by_src.get(j.source, 0) + 1
+        digest_by_source_df = pd.DataFrame(
+            [{"Source": k, "New in this email": v} for k, v in sorted(by_src.items(), key=lambda kv: (-kv[1], kv[0]))]
+        )
 
         top_block = cfg.get("contact_search")
         top_block = top_block if isinstance(top_block, dict) else {}
@@ -297,6 +344,9 @@ def run(argv: List[str] | None = None) -> int:
 
         if args.dry_run:
             print("Dry-run: not updating jobs.db or sending email.")
+            if not fetch_stats_df.empty:
+                print("\nSources checked (raw fetch counts):", file=sys.stderr)
+                print(fetch_stats_df.to_string(index=False), file=sys.stderr)
             return 0
 
         db.insert_links(conn, [j.link for j in new_jobs])
@@ -305,6 +355,8 @@ def run(argv: List[str] | None = None) -> int:
             contacts_for_out,
             cfg,
             network_df=network_df,
+            fetch_stats_df=fetch_stats_df,
+            digest_by_source_df=digest_by_source_df,
             attach_excel=attach_excel,
             excel_path=xlsx_path,
         )
