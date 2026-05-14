@@ -217,9 +217,16 @@ def run(argv: List[str] | None = None) -> int:
         help="Comma list: serpapi,google_site_ats,greenhouse,lever,rss (SerpAPI requires matching serpapi_features.* flags)",
     )
     parser.add_argument("--db", type=Path, default=root / "jobs.db", help="SQLite path")
+    parser.add_argument(
+        "--allow-non-israel-email",
+        action="store_true",
+        help="Disable digest_email_enforce_location_hint for this run (digest may include non-Israel rows).",
+    )
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
+    if args.allow_non_israel_email:
+        cfg = {**cfg, "digest_email_enforce_location_hint": False}
 
     if args.test_email:
         sample = pd.DataFrame(
@@ -292,6 +299,28 @@ def run(argv: List[str] | None = None) -> int:
                 print("\nSources checked (raw fetch counts):", file=sys.stderr)
                 print(fetch_stats_df.to_string(index=False), file=sys.stderr)
             return 0
+
+        if cfg.get("digest_email_enforce_location_hint", True):
+            gate_cfg = {**cfg, "filter_jobs_by_location_hint": True}
+            before_gate = len(new_jobs)
+            new_jobs = filter_jobs_by_location_hint(new_jobs, gate_cfg)
+            dropped = before_gate - len(new_jobs)
+            if dropped:
+                print(
+                    f"Digest email gate: removed {dropped} job(s) that do not match "
+                    "Israel / location_hint rules (title+location strict match). "
+                    "Use --allow-non-israel-email to send them anyway.",
+                    file=sys.stderr,
+                )
+            if not new_jobs:
+                print(
+                    "Not sending digest: no jobs left after digest_email_enforce_location_hint.",
+                    file=sys.stderr,
+                )
+                if not fetch_stats_df.empty:
+                    print("\nSources checked (raw fetch counts):", file=sys.stderr)
+                    print(fetch_stats_df.to_string(index=False), file=sys.stderr)
+                return 0
 
         rows = [j.as_row() for j in new_jobs]
         df = pd.DataFrame(rows)
