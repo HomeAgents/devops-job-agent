@@ -76,8 +76,8 @@
   ],
   "serpapi_google_domain": "google.co.il",
   "serpapi_gl": "il",
-  "serpapi_hl": "en",
-  "serpapi_google_jobs_hl_variants": ["en"],
+  "serpapi_hl": "he",
+  "serpapi_google_jobs_hl_variants": ["he", "en"],
   "serpapi_location": "Israel",
   "serpapi_google_jobs_queries": [],
   "serpapi_query_template": {
