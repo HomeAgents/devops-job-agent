@@ -17,11 +17,13 @@ URLs are **normalized** (tracking query params stripped) for deduplication.
 
 ```bash
 cd devops-job-agent
-python3 -m venv .venv && source .venv/bin/activate   # optional
-pip install -r requirements.txt
+python3 -m venv .venv && source .venv/bin/activate   # recommended
+python3 -m pip install -r requirements.txt
 cp .env.example .env
 # Edit .env: SERPAPI_KEY, EMAIL_USER, EMAIL_PASS, EMAIL_TO (Gmail app password)
 ```
+
+If you see `ModuleNotFoundError` (e.g. `feedparser`), the interpreter you use to run `python run.py` does not have dependencies installed — run **`pip install -r requirements.txt`** in that same environment (or activate `.venv` first).
 
 Optional: shared JSON settings (same as before):
 
