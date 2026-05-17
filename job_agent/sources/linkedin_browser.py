@@ -462,6 +462,7 @@ _REACH_OUT_SUMMARY_JS = """
   t = t.replace(/\\s*Show all\\s*$/i, '').replace(/\\s*הצג הכל\\s*$/i, '').trim();
   t = t.replace(/^[\\w\\s]+ logo\\s+/i, '').trim();
   if (/meet the hiring team|hiring team|צוות הגיוס/i.test(t)) return '';
+  if (/company alumni|school alumni|חברי בית ספר/i.test(t)) return '';
   if (/in your network|ברשת|אנשים ש|others in your network/i.test(t)) return t;
   return '';
 }
