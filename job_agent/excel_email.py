@@ -278,7 +278,7 @@ def _df_to_html_table(
     )
 
 
-def _network_html_table(df: pd.DataFrame) -> str:
+def _network_html_table(df: pd.DataFrame, *, include_heading: bool = True) -> str:
     if df.empty:
         return ""
     cols = [
@@ -312,8 +312,13 @@ def _network_html_table(df: pd.DataFrame) -> str:
             else:
                 cells.append(f"<td>{esc(s)}</td>")
         trs.append("<tr>" + "".join(cells) + "</tr>")
-    return (
+    heading = (
         "<h2 style=\"font-family:sans-serif;\">Your network at these employers</h2>"
+        if include_heading
+        else ""
+    )
+    return (
+        f"{heading}"
         "<p style=\"font-family:sans-serif;font-size:13px;color:#444;\">"
         "Matched from your offline LinkedIn <strong>Connections</strong> export (the employer "
         "text each person had in that file). People may have moved — confirm on LinkedIn "
@@ -324,8 +329,72 @@ def _network_html_table(df: pd.DataFrame) -> str:
     )
 
 
-def _stats_block_html(title: str, df: pd.DataFrame, caption: str = "") -> str:
-    """Generic HTML table for fetch stats / per-source counts."""
+def digest_email_collapsible_enabled(cfg: Dict[str, Any]) -> bool:
+    block = cfg.get("digest_email_collapsible_tables")
+    if isinstance(block, bool):
+        return block
+    if isinstance(block, dict):
+        return bool(block.get("enabled", False))
+    return False
+
+
+def digest_email_section_open(cfg: Dict[str, Any], section: str, *, default: bool = True) -> bool:
+    """When collapsible mode is on: True = section starts expanded, False = collapsed."""
+    if not digest_email_collapsible_enabled(cfg):
+        return True
+    block = cfg.get("digest_email_collapsible_tables")
+    if not isinstance(block, dict):
+        return default
+    sections = block.get("sections")
+    if isinstance(sections, dict) and section in sections:
+        return bool(sections[section])
+    flat = block.get(f"{section}_open")
+    if flat is not None:
+        return bool(flat)
+    if section == "jobs":
+        return bool(block.get("jobs_open", block.get("default_open", default)))
+    return default
+
+
+def _wrap_email_collapsible_section(
+    title: str,
+    content_html: str,
+    cfg: Dict[str, Any],
+    *,
+    section: str,
+    hint: str = "",
+    default_open: bool = True,
+) -> str:
+    """Wrap a digest block in <details> so readers can expand/collapse (HTML mail)."""
+    if not content_html.strip():
+        return ""
+    esc = html.escape
+    if not digest_email_collapsible_enabled(cfg):
+        return (
+            f'<h2 style="font-family:sans-serif;">{esc(title)}</h2>'
+            f"{content_html}"
+        )
+    is_open = digest_email_section_open(cfg, section, default=default_open)
+    open_attr = " open" if is_open else ""
+    hint_html = (
+        f' <span style="font-weight:normal;color:#555;font-size:13px;">— {esc(hint)}</span>'
+        if hint
+        else ""
+    )
+    return (
+        f'<details style="margin:1.25em 0;border:1px solid #d0d0d0;border-radius:8px;'
+        f'padding:0.6em 0.9em;font-family:sans-serif;"{open_attr}>'
+        f'<summary style="cursor:pointer;font-size:16px;font-weight:bold;list-style-position:outside;">'
+        f"{esc(title)}{hint_html}</summary>"
+        '<p style="font-size:12px;color:#666;margin:0.45em 0 0.65em;">'
+        "Tap or click the heading to show or hide this table.</p>"
+        f'<div style="margin-top:0.25em;overflow-x:auto;">{content_html}</div>'
+        "</details>"
+    )
+
+
+def _dataframe_html_table(df: pd.DataFrame) -> str:
+    """HTML table body only (no heading)."""
     if df is None or df.empty:
         return ""
     esc = html.escape
@@ -339,16 +408,36 @@ def _stats_block_html(title: str, df: pd.DataFrame, caption: str = "") -> str:
             s = "" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
             cells.append(f"<td>{esc(s)}</td>")
         trs.append("<tr>" + "".join(cells) + "</tr>")
+    return (
+        '<table border="1" cellpadding="6" cellspacing="0" '
+        'style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">'
+        f"<thead><tr>{ths}</tr></thead><tbody>{''.join(trs)}</tbody></table>"
+    )
+
+
+def _stats_block_html(title: str, df: pd.DataFrame, caption: str = "", *, cfg: Optional[Dict[str, Any]] = None) -> str:
+    """Generic HTML table for fetch stats / search profile."""
+    if df is None or df.empty:
+        return ""
+    esc = html.escape
     cap = (
-        f"<p style=\"font-family:sans-serif;font-size:13px;color:#444;\">{esc(caption)}</p>"
+        f'<p style="font-family:sans-serif;font-size:13px;color:#444;">{esc(caption)}</p>'
         if caption
         else ""
     )
-    return (
-        f"<h2 style=\"font-family:sans-serif;\">{esc(title)}</h2>{cap}"
-        '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">'
-        f"<thead><tr>{ths}</tr></thead><tbody>{''.join(trs)}</tbody></table>"
-    )
+    table = _dataframe_html_table(df)
+    inner = f"{cap}{table}"
+    if cfg is not None and digest_email_collapsible_enabled(cfg):
+        hint = f"{len(df)} row(s)"
+        return _wrap_email_collapsible_section(
+            title,
+            inner,
+            cfg,
+            section="search_profile",
+            hint=hint,
+            default_open=digest_email_section_open(cfg, "search_profile", default=False),
+        )
+    return f'<h2 style="font-family:sans-serif;">{esc(title)}</h2>{inner}'
 
 
 def _stats_block_plain(title: str, df: pd.DataFrame) -> List[str]:
@@ -363,7 +452,7 @@ def _stats_block_plain(title: str, df: pd.DataFrame) -> List[str]:
     return lines
 
 
-def _contacts_html_table(df: pd.DataFrame) -> str:
+def _contacts_html_table(df: pd.DataFrame, *, include_heading: bool = True) -> str:
     if df.empty:
         return ""
     cols = [c for c in ("Company", "Role Hint", "Job Link", "LinkedIn Profile", "Message") if c in df.columns]
@@ -384,8 +473,11 @@ def _contacts_html_table(df: pd.DataFrame) -> str:
             else:
                 cells.append(f"<td>{esc(s)}</td>")
         trs.append("<tr>" + "".join(cells) + "</tr>")
+    heading = (
+        "<h2 style=\"font-family:sans-serif;\">Recruiter radar</h2>" if include_heading else ""
+    )
     return (
-        "<h2 style=\"font-family:sans-serif;\">Recruiter radar</h2>"
+        f"{heading}"
         '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">'
         f"<thead><tr>{ths}</tr></thead><tbody>{''.join(trs)}</tbody></table>"
     )
@@ -417,12 +509,19 @@ def _removed_jobs_email_block(
         table_action="restore",
         fixed_row_color=_REMOVED_JOBS_ROW_COLOR,
     )
-    return (
-        "<h2 style=\"font-family:sans-serif;\">Removed jobs</h2>"
+    intro = (
         "<p style=\"font-family:sans-serif;font-size:13px;color:#444;\">"
         "Hidden from future digests. Click <strong>Restore</strong> to bring a job back."
         "</p>"
-        f"{table}"
+    )
+    n = len(removed_jobs_df)
+    return _wrap_email_collapsible_section(
+        "Removed jobs",
+        f"{intro}{table}",
+        cfg,
+        section="removed",
+        hint=f"{n} hidden",
+        default_open=digest_email_section_open(cfg, "removed", default=False),
     )
 
 
@@ -446,10 +545,14 @@ def _build_digest_html(
     if isinstance(custom_intro, str) and custom_intro.strip():
         intro = f"<p style=\"font-family:sans-serif;font-size:14px;\">{custom_intro.strip()}</p>"
     if digest_note.strip():
-        intro += (
-            f"<p style=\"font-family:sans-serif;font-size:14px;\">"
-            f"{html.escape(digest_note.strip())}</p>"
-        )
+        note = digest_note.strip()
+        if "<" in note and ">" in note:
+            intro += f"<p style=\"font-family:sans-serif;font-size:14px;\">{note}</p>"
+        else:
+            intro += (
+                f"<p style=\"font-family:sans-serif;font-size:14px;\">"
+                f"{html.escape(note)}</p>"
+            )
     only_new = bool(cfg.get("digest_email_only_new", False))
     search_block = ""
     if table_action != "restore":
@@ -459,6 +562,7 @@ def _build_digest_html(
                 "Search profile",
                 profile_df,
                 "Unique added = new job links from this run for that source (— = filter or not fetched).",
+                cfg=cfg,
             )
     fetch_block = ""
     if table_action == "restore":
@@ -483,11 +587,39 @@ def _build_digest_html(
     if _include_removed_table_in_digest(cfg, table_action):
         rdf = removed_jobs_df if removed_jobs_df is not None else pd.DataFrame()
         removed_block = _removed_jobs_email_block(rdf, cfg, headers)
-    jobs_block = (
-        f"<h2 style=\"font-family:sans-serif;\">{html.escape(jobs_heading)}</h2>{jobs_table}"
+    jobs_hint = f"{len(jobs_df)} job(s)" if not jobs_df.empty else ""
+    jobs_block = _wrap_email_collapsible_section(
+        jobs_heading,
+        jobs_table,
+        cfg,
+        section="jobs",
+        hint=jobs_hint,
+        default_open=digest_email_section_open(cfg, "jobs", default=True),
     )
-    network_block = _network_html_table(network_df)
-    contacts_block = _contacts_html_table(contacts_df)
+    if digest_email_collapsible_enabled(cfg):
+        network_inner = _network_html_table(network_df, include_heading=False)
+        network_block = ""
+        if network_inner:
+            network_block = _wrap_email_collapsible_section(
+                "Your network at these employers",
+                network_inner,
+                cfg,
+                section="network",
+                default_open=digest_email_section_open(cfg, "network", default=False),
+            )
+        contacts_inner = _contacts_html_table(contacts_df, include_heading=False)
+        contacts_block = ""
+        if contacts_inner:
+            contacts_block = _wrap_email_collapsible_section(
+                "Recruiter radar",
+                contacts_inner,
+                cfg,
+                section="contacts",
+                default_open=digest_email_section_open(cfg, "contacts", default=False),
+            )
+    else:
+        network_block = _network_html_table(network_df)
+        contacts_block = _contacts_html_table(contacts_df)
     return (
         "<html><body>"
         f"{intro}{jobs_block}{removed_block}{search_block}{fetch_block}"

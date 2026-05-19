@@ -18,7 +18,7 @@ from job_agent.excel_email import (
     TRACKER_COL_LAST_UPDATED,
     _rename_job_columns,
 )
-from job_agent.util import normalize_url
+from job_agent.util import job_links_same_posting, normalize_url
 
 STATUS_NEW = "New"
 STATUS_IN_PROGRESS = "In Progress"
@@ -318,6 +318,25 @@ def tracker_index_by_link(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def _tracker_row_for_link(by_link: Dict[str, Dict[str, Any]], link: str) -> Dict[str, Any]:
+    """Match tracker row by URL or same posting (LinkedIn job id, etc.)."""
+    key = normalize_url(link.strip())
+    if key in by_link:
+        return by_link[key]
+    for stored_link, row in by_link.items():
+        if job_links_same_posting(key, stored_link):
+            return row
+    return {}
+
+
+def _tracker_storage_key(by_link: Dict[str, Dict[str, Any]], link: str) -> str:
+    key = normalize_url(link.strip())
+    for stored_link in by_link:
+        if job_links_same_posting(key, stored_link):
+            return stored_link
+    return key
+
+
 def sync_digest_jobs_to_tracker(jobs_df: pd.DataFrame, cfg: Dict[str, Any], *, root: Path) -> None:
     """Append digest rows missing from the tracker (keeps existing apply/status)."""
     if jobs_df.empty or not job_tracker_enabled(cfg):
@@ -327,7 +346,7 @@ def sync_digest_jobs_to_tracker(jobs_df: pd.DataFrame, cfg: Dict[str, Any], *, r
     new_rows: List[Dict[str, Any]] = []
     for _, row in jobs_df.iterrows():
         link = normalize_url(str(row.get("Link") or "").strip())
-        if not link or link in by_link:
+        if not link or _tracker_row_for_link(by_link, link):
             continue
         snap = {c: row.get(c, "") for c in DIGEST_JOB_TABLE_COLUMNS if c in row.index}
         snap["Link"] = link
@@ -353,17 +372,22 @@ def record_job_apply(link: str, job_snapshot: Dict[str, Any], cfg: Dict[str, Any
     tracker = load_tracker_df(cfg, root=root)
     by_link = tracker_index_by_link(tracker)
 
-    if link in by_link:
-        row = dict(by_link[link])
+    storage_key = _tracker_storage_key(by_link, link)
+    if storage_key in by_link:
+        row = dict(by_link[storage_key])
         for k, v in job_snapshot.items():
             if _is_populated(v) and k in DIGEST_JOB_TABLE_COLUMNS:
                 row[k] = v
     else:
         row = {c: job_snapshot.get(c, "") for c in job_tracker_columns()}
         row["Link"] = link
+        storage_key = link
 
     row[TRACKER_COL_LAST_UPDATED] = when
     row["Status"] = normalize_status_label(status, cfg, strict=False)
+    row["Link"] = link
+    if storage_key != link and storage_key in by_link:
+        del by_link[storage_key]
     by_link[link] = row
     rows = [by_link[k] for k in sorted(by_link.keys())]
     save_tracker_df(pd.DataFrame(rows), cfg, root=root)
@@ -384,17 +408,27 @@ def set_job_tracker_status(
     tracker = load_tracker_df(cfg, root=root)
     by_link = tracker_index_by_link(tracker)
 
-    if link in by_link:
-        row = dict(by_link[link])
+    storage_key = _tracker_storage_key(by_link, link)
+    if storage_key in by_link:
+        row = dict(by_link[storage_key])
     else:
         snap = job_snapshot or {}
         row = {c: _cell_str(snap.get(c, "")) for c in job_tracker_columns()}
         row["Link"] = link
         row[TRACKER_COL_LAST_UPDATED] = ""
         row["Status"] = status_default_new(cfg)
+        storage_key = link
+
+    if job_snapshot:
+        for k, v in job_snapshot.items():
+            if _is_populated(v) and k in DIGEST_JOB_TABLE_COLUMNS:
+                row[k] = v
 
     row["Status"] = canonical
     row[TRACKER_COL_LAST_UPDATED] = touch_last_updated(cfg)
+    row["Link"] = link
+    if storage_key != link and storage_key in by_link:
+        del by_link[storage_key]
     by_link[link] = row
     save_tracker_df(pd.DataFrame([by_link[k] for k in sorted(by_link.keys())]), cfg, root=root)
     return canonical
@@ -439,7 +473,7 @@ def apply_tracker_to_digest_df(jobs_df: pd.DataFrame, cfg: Dict[str, Any], *, ro
     status_col: List[str] = []
     for _, row in out.iterrows():
         link = normalize_url(str(row.get("Link") or "").strip())
-        rec = by_link.get(link) or {}
+        rec = _tracker_row_for_link(by_link, link)
         updated = _cell_str(rec.get(TRACKER_COL_LAST_UPDATED, ""))
         status = normalize_status_label(rec.get("Status", ""), cfg, strict=False)
         if not status:

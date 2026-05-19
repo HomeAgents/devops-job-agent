@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from job_agent.models import Job
+from job_agent.util import job_links_same_posting, normalize_url
 
 
 def _utc_now_iso() -> str:
@@ -97,8 +98,21 @@ def upsert_jobs(conn: sqlite3.Connection, jobs: List[Job], *, mark_emailed: bool
     now = _utc_now_iso()
     new_count = 0
     for job in jobs:
-        if not job.link:
+        link = normalize_url((job.link or "").strip())
+        if not link:
             continue
+        if link != job.link:
+            job = Job(
+                source=job.source,
+                company=job.company,
+                title=job.title,
+                location=job.location,
+                link=link,
+                posted=job.posted,
+                score=job.score,
+                search_fallback=job.search_fallback,
+                raw=job.raw,
+            )
         payload = job_to_payload(job)
         emailed_at = now if mark_emailed else None
         cur = conn.execute("SELECT link FROM jobs WHERE link = ?", (job.link,))
@@ -119,13 +133,18 @@ def upsert_jobs(conn: sqlite3.Connection, jobs: List[Job], *, mark_emailed: bool
 
 
 def load_job_by_link(conn: sqlite3.Connection, link: str) -> Job | None:
-    key = (link or "").strip()
+    key = normalize_url((link or "").strip())
     if not key:
         return None
     row = conn.execute("SELECT payload FROM jobs WHERE link = ?", (key,)).fetchone()
-    if not row or not row[0]:
-        return None
-    return job_from_payload(str(row[0]))
+    if row and row[0]:
+        return job_from_payload(str(row[0]))
+    for (stored_link,) in conn.execute("SELECT link FROM jobs"):
+        if stored_link and job_links_same_posting(str(stored_link), key):
+            row = conn.execute("SELECT payload FROM jobs WHERE link = ?", (stored_link,)).fetchone()
+            if row and row[0]:
+                return job_from_payload(str(row[0]))
+    return None
 
 
 def load_pending_jobs(conn: sqlite3.Connection) -> List[Job]:
@@ -181,13 +200,29 @@ def mark_emailed(conn: sqlite3.Connection, links: List[str]) -> None:
 def delete_jobs(conn: sqlite3.Connection, links: List[str]) -> int:
     """Remove job rows (used when user marks Remove → Yes in digest email)."""
     deleted = 0
+    seen: set[str] = set()
     for link in links:
-        if not link:
+        key = normalize_url((link or "").strip())
+        if not key or key in seen:
             continue
-        cur = conn.execute("DELETE FROM jobs WHERE link = ?", (link,))
+        seen.add(key)
+        cur = conn.execute("DELETE FROM jobs WHERE link = ?", (key,))
         deleted += cur.rowcount
     conn.commit()
     return deleted
+
+
+def delete_jobs_for_posting(conn: sqlite3.Connection, link: str) -> int:
+    """Delete every DB row for the same posting (LinkedIn job id, etc.)."""
+    key = normalize_url((link or "").strip())
+    if not key:
+        return 0
+    to_delete: List[str] = []
+    for (stored_link,) in conn.execute("SELECT link FROM jobs"):
+        sl = str(stored_link or "").strip()
+        if sl and (sl == key or job_links_same_posting(sl, key)):
+            to_delete.append(sl)
+    return delete_jobs(conn, to_delete)
 
 
 def filter_new_links(conn: sqlite3.Connection, links: list[str]) -> list[str]:

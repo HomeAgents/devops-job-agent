@@ -14,6 +14,18 @@ _OG_TITLE_META_RE = re.compile(
     r'property="og:title"\s+content="([^"]+)"',
     re.I,
 )
+_OG_DESC_META_RE = re.compile(
+    r'<meta[^>]+(?:property|name)=["\'](?:og:)?description["\'][^>]+content=["\']([^"\']+)["\']',
+    re.I,
+)
+_OG_DESC_META_ALT = re.compile(
+    r'content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:)?description["\']',
+    re.I,
+)
+_LINKEDIN_SNIPPET_TAIL_RE = re.compile(
+    r"\s*…?\s*see this and similar jobs on linkedin\.?\s*$",
+    re.I,
+)
 _LINKEDIN_POST_PATH_RE = re.compile(r"/posts/|/feed/update/", re.I)
 
 
@@ -99,6 +111,36 @@ def fetch_linkedin_og_details_http(link: str) -> Dict[str, str]:
     if not m:
         return {}
     return parse_linkedin_hiring_title(m.group(1))
+
+
+def fetch_linkedin_job_snippet_http(link: str) -> str:
+    """Public meta description snippet (often 150+ chars of JD preview)."""
+    if not is_linkedin_job_view_url(link):
+        return ""
+    url = (link or "").split("?")[0]
+    try:
+        req = Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        with urlopen(req, timeout=20) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    for pat in (_OG_DESC_META_RE, _OG_DESC_META_ALT):
+        m = pat.search(html or "")
+        if m:
+            text = m.group(1).strip()
+            text = _LINKEDIN_SNIPPET_TAIL_RE.sub("", text)
+            text = re.sub(r"^posted\s+[\d:]+\s*[ap]m\.?\s*", "", text, flags=re.I)
+            return text.strip()
+    return ""
 
 
 def split_linkedin_google_result(title: str, snippet: str, link: str) -> tuple[str, str, str]:

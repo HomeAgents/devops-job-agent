@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Set
 
 from job_agent.models import Job
-from job_agent.util import normalize_url
+from job_agent.util import job_link_identity, job_links_same_posting, normalize_url
 
 
 def ignore_store_path(cfg: Dict[str, Any] | None = None) -> Path:
@@ -62,8 +62,10 @@ def _save_raw_store(data: Dict[str, Any], cfg: Dict[str, Any] | None = None) -> 
 def job_to_removed_record(job: Job, *, removed_at: str | None = None) -> Dict[str, Any]:
     raw = job.raw if isinstance(job.raw, dict) else {}
     reach = raw.get("reach_out_people") if isinstance(raw.get("reach_out_people"), list) else []
+    link = normalize_url(job.link)
     return {
-        "link": normalize_url(job.link),
+        "link": link,
+        "link_identity": job_link_identity(link),
         "title": job.title,
         "company": job.company,
         "location": job.location,
@@ -128,6 +130,7 @@ def add_removed_record(record: Dict[str, Any], cfg: Dict[str, Any] | None = None
     )
     row = dict(record)
     row["link"] = link
+    row.setdefault("link_identity", job_link_identity(link))
     row.setdefault("removed_at", _utc_now_iso())
     removed.append(row)
     data["removed"] = removed
@@ -237,3 +240,58 @@ def merge_ignore_links(cfg: Dict[str, Any]) -> Set[str]:
     }
     out |= load_stored_ignore_links(cfg)
     return out
+
+
+def load_ignore_identities(cfg: Dict[str, Any] | None = None) -> Set[str]:
+    """Canonical posting ids for all ignored / removed links."""
+    return {job_link_identity(link) for link in merge_ignore_links(cfg or {}) if link}
+
+
+def is_link_ignored(link: str, cfg: Dict[str, Any] | None = None) -> bool:
+    cfg = cfg or {}
+    url = normalize_url((link or "").strip())
+    if not url:
+        return False
+    ignore_urls = merge_ignore_links(cfg)
+    if url in ignore_urls:
+        return True
+    return any(job_links_same_posting(url, ignored) for ignored in ignore_urls)
+
+
+def filter_jobs_not_removed(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
+    """Drop jobs on the user hide list (exact URL or same posting id)."""
+    return [j for j in jobs if not is_link_ignored(j.link, cfg)]
+
+
+def filter_dataframe_not_removed(df: "Any", cfg: Dict[str, Any]) -> "Any":
+    """Remove hide-list rows from a digest jobs DataFrame."""
+    if df is None or df.empty or "Link" not in df.columns:
+        return df
+    keep = [not is_link_ignored(str(link), cfg) for link in df["Link"].astype(str)]
+    return df.loc[keep].reset_index(drop=True)
+
+
+def filter_removed_dataframe_not_in_main(removed_df: "Any", main_df: "Any") -> "Any":
+    """Ensure removed subsection does not repeat jobs from the main digest table."""
+    import pandas as pd
+
+    if removed_df is None or removed_df.empty:
+        return removed_df
+    if main_df is None or main_df.empty or "Link" not in main_df.columns:
+        return removed_df
+    main_links = [normalize_url(str(x).strip()) for x in main_df["Link"] if str(x).strip()]
+    main_ids = {job_link_identity(x) for x in main_links}
+    keep_rows = []
+    for _, row in removed_df.iterrows():
+        link = normalize_url(str(row.get("Link") or "").strip())
+        if not link:
+            keep_rows.append(row)
+            continue
+        if link in main_links:
+            continue
+        if job_link_identity(link) in main_ids:
+            continue
+        keep_rows.append(row)
+    if not keep_rows:
+        return removed_df.iloc[0:0].copy()
+    return pd.DataFrame(keep_rows).reset_index(drop=True)

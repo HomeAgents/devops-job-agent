@@ -10,6 +10,28 @@ import pandas as pd
 from job_agent.query_build import build_google_browser_queries
 
 
+def _comeet_search_profile_keywords(cfg: Dict[str, Any]) -> str:
+    """Human-readable scope for Comeet API sources (companies + title filter)."""
+    block = cfg.get("comeet") if isinstance(cfg.get("comeet"), dict) else {}
+    if not block.get("enabled"):
+        return ""
+    companies = block.get("companies") or []
+    names: List[str] = []
+    for entry in companies:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or entry.get("slug") or "").strip()
+        if name:
+            names.append(name)
+    title_filter = (
+        "title filter: DevOps · platform · SRE · infrastructure · "
+        "manager · director · head · lead · vp"
+    )
+    if not names:
+        return f"Careers API ({title_filter})"
+    return f"{', '.join(names)} · {title_filter}"
+
+
 def _split_or_phrases(text: str) -> List[str]:
     parts = re.split(r"\s+OR\s+", text.strip(), flags=re.IGNORECASE)
     out: List[str] = []
@@ -67,6 +89,10 @@ def build_search_profile_rows(cfg: Dict[str, Any]) -> List[Tuple[str, str]]:
     if isinstance(gh, list) and gh:
         rows.append(("Greenhouse boards", ", ".join(str(b).strip() for b in gh if str(b).strip())))
 
+    comeet_kw = _comeet_search_profile_keywords(cfg)
+    if comeet_kw:
+        rows.append(("Comeet companies", comeet_kw))
+
     lever = cfg.get("lever_sites") or []
     if isinstance(lever, list) and lever:
         rows.append(("Lever sites", ", ".join(str(s).strip() for s in lever if str(s).strip())))
@@ -123,6 +149,9 @@ def _unique_added_display(scope: str, by_site: Dict[str, int]) -> str:
     if s == "Greenhouse boards":
         total = _sum_sites(by_site, "Greenhouse:")
         return str(total) if total is not None else _NA_ADDED
+    if s == "Comeet companies":
+        total = _sum_sites(by_site, "Comeet:")
+        return str(total) if total is not None else _NA_ADDED
     if s == "Lever sites":
         total = _sum_sites(by_site, "Lever:")
         return str(total) if total is not None else _NA_ADDED
@@ -143,6 +172,8 @@ def _consumed_sites(scope: str, by_site: Dict[str, int]) -> Set[str]:
                 consumed.add(label)
     if s == "Greenhouse boards":
         consumed.update(k for k in by_site if k.startswith("Greenhouse:"))
+    if s == "Comeet companies":
+        consumed.update(k for k in by_site if k.startswith("Comeet:"))
     if s == "Lever sites":
         consumed.update(k for k in by_site if k.startswith("Lever:"))
     if s == "RSS feeds":

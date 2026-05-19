@@ -204,21 +204,34 @@ def _html_page(title: str, body: str, *, status: int = 200) -> bytes:
 
 def _apply_remove(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
     from job_agent import db as job_db
+    from job_agent.util import job_link_identity
 
-    snapshot: Dict[str, Any] = {"link": link}
+    link = normalize_url(link.strip())
+    snapshot: Dict[str, Any] = {"link": link, "link_identity": job_link_identity(link)}
     conn = _db_connect(cfg)
+    deleted = 0
     try:
         job = job_db.load_job_by_link(conn, link)
         if job is not None:
             snapshot = job_to_removed_record(job)
-        job_db.delete_jobs(conn, [link])
+        deleted = job_db.delete_jobs_for_posting(conn, link)
     finally:
         conn.close()
     added = add_removed_record(snapshot, cfg)
+    title = snapshot.get("title") or link
     if added:
-        title = snapshot.get("title") or link
-        return True, f"<p><strong>Removed.</strong> «{title}» will not appear in future digests.</p>"
-    return False, "<p><strong>Already removed.</strong> This job was already on your hide list.</p>"
+        return (
+            True,
+            f"<p><strong>Removed.</strong> «{html.escape(str(title))}» will not appear in "
+            f"<strong>Jobs in this digest</strong> on future emails.</p>"
+            f"<p style=\"font-size:13px;color:#444;\">Saved to hide list"
+            f"{f'; cleared {deleted} row(s) from jobs.db' if deleted else ''}.</p>",
+        )
+    return (
+        False,
+        f"<p><strong>Already on hide list.</strong> «{html.escape(str(title))}» was already removed."
+        f"{f' Refreshed snapshot; cleared {deleted} row(s) from jobs.db.' if deleted else ''}</p>",
+    )
 
 
 def _project_root(cfg: Dict[str, Any]) -> "Path":
@@ -238,8 +251,25 @@ def _apply_set_status(link: str, status: str, cfg: Dict[str, Any]) -> Tuple[bool
     from job_agent.job_tracker_excel import default_job_tracker_path, set_job_tracker_status
 
     root = _project_root(cfg)
+    snapshot: Dict[str, Any] = {"Link": link, "link": link}
+    from job_agent import db as job_db
+
+    conn = _db_connect(cfg)
     try:
-        canonical = set_job_tracker_status(link, status, cfg, root=root)
+        job = job_db.load_job_by_link(conn, link)
+        if job is not None:
+            snapshot = {
+                "Job Title": job.title,
+                "Company": job.company,
+                "Location": job.location,
+                "Link": job.link,
+                "Source": job.source,
+                "Network": "",
+            }
+    finally:
+        conn.close()
+    try:
+        canonical = set_job_tracker_status(link, status, cfg, root=root, job_snapshot=snapshot)
     except ValueError as exc:
         return False, f"<p>{html.escape(str(exc))}</p>"
     path = default_job_tracker_path(root, cfg)
@@ -441,6 +471,54 @@ def _stop_background_server() -> None:
             _SERVER_THREAD = None
 
 
+def _remove_server_log_path(cfg: Dict[str, Any]) -> "Path":
+    from pathlib import Path
+
+    return ignore_store_path(cfg).parent / "digest-remove-server.log"
+
+
+def _spawn_detached_remove_server(cfg: Dict[str, Any]) -> bool:
+    """Start remove/status server in a separate process (survives after digest exits)."""
+    import subprocess
+    import sys
+
+    root = _project_root(cfg)
+    run_py = root / "run.py"
+    if not run_py.is_file():
+        print(f"digest-remove: cannot find {run_py}", file=sys.stderr)
+        return False
+    log_path = _remove_server_log_path(cfg)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(log_path, "a", encoding="utf-8") as logf:
+            subprocess.Popen(
+                [sys.executable, str(run_py), "--digest-remove-server"],
+                cwd=str(root),
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+            )
+    except OSError as exc:
+        print(f"digest-remove server failed to spawn: {exc}", file=sys.stderr)
+        return False
+    for _ in range(24):
+        time.sleep(0.25)
+        if _health_check(cfg, timeout=0.8) and _server_has_tracker_routes(cfg, timeout=0.8):
+            print(
+                f"Digest remove/status server running on {remove_base_url(cfg)} "
+                f"(log: {log_path})",
+                file=sys.stderr,
+            )
+            return True
+    print(
+        f"digest-remove server did not respond on {remove_base_url(cfg)} "
+        f"(see {log_path})",
+        file=sys.stderr,
+    )
+    return False
+
+
 def ensure_remove_server_running(cfg: Dict[str, Any]) -> bool:
     if not digest_remove_enabled(cfg):
         return False
@@ -448,23 +526,12 @@ def ensure_remove_server_running(cfg: Dict[str, Any]) -> bool:
         return True
     if _health_check(cfg) and not _server_has_tracker_routes(cfg):
         print(
-            "Digest server on port is outdated (no /apply). Restarting with current code…",
+            "Digest server on port is outdated (no /status). Restart the remove server.",
             file=sys.stderr,
         )
         _stop_background_server()
-        host, port = remove_listen_host_port(cfg)
-        try:
-            import urllib.request
-
-            urllib.request.urlopen(f"http://{host}:{port}/shutdown-not-supported", timeout=0.3)
-        except Exception:
-            pass
-    try:
-        start_remove_server(cfg, background=True)
-        return _health_check(cfg, timeout=1.5) and _server_has_tracker_routes(cfg, timeout=1.5)
-    except OSError as exc:
-        print(f"digest-remove server failed to start: {exc}", file=sys.stderr)
-        return False
+    _stop_background_server()
+    return _spawn_detached_remove_server(cfg)
 
 
 def run_remove_server_forever(cfg: Dict[str, Any]) -> None:

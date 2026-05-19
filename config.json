@@ -62,6 +62,17 @@
     "omit_after_clause": false
   },
   "greenhouse_boards": ["nice", "taboola"],
+  "comeet": {
+    "enabled": true,
+    "discover_credentials": true,
+    "discover_wait_seconds": 6,
+    "companies": [
+      {
+        "name": "arpeely",
+        "board_url": "https://www.comeet.com/jobs/arpeely/57.001"
+      }
+    ]
+  },
   "lever_sites": [],
   "location_hint": "Israel",
   "filter_jobs_by_location_hint": true,
@@ -118,6 +129,16 @@
     "removed": "DevOps leadership jobs — removed (click Restore)"
   },
   "digest_email_include_removed_table": true,
+  "digest_email_collapsible_tables": {
+    "enabled": true,
+    "sections": {
+      "jobs": true,
+      "removed": false,
+      "search_profile": false,
+      "network": false,
+      "contacts": false
+    }
+  },
   "digest_email_enforce_location_hint": true,
   "max_posted_age_days": 30,
   "keep_unknown_posted_age": true,
@@ -126,7 +147,8 @@
   "cv_fit": {
     "enabled": true,
     "profile_path": "Arkadiy_Kats_CV.pdf",
-    "min_job_text_chars": 100,
+    "min_job_text_chars": 80,
+    "scoring_mode": "job_coverage",
     "column_name": "CV fit %"
   },
   "job_tracker": {

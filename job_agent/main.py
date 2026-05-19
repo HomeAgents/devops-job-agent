@@ -38,7 +38,6 @@ from job_agent.network import (
 from job_agent.ignore_store import (
     build_removed_jobs_dataframe,
     load_removed_records,
-    merge_ignore_links,
     removed_records_to_jobs,
 )
 from job_agent.util import normalize_url
@@ -133,19 +132,19 @@ def _digest_only_new(cfg: Dict[str, Any]) -> bool:
 
 
 def _apply_digest_ignore(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
-    ignore_links = merge_ignore_links(cfg)
+    from job_agent.ignore_store import filter_jobs_not_removed
+
     raw_cos = cfg.get("digest_ignore_companies")
     ignore_cos = {
         normalize_company(str(x))
         for x in (raw_cos if isinstance(raw_cos, list) else [])
         if str(x).strip()
     }
-    if not ignore_links and not ignore_cos:
+    jobs = filter_jobs_not_removed(jobs, cfg)
+    if not ignore_cos:
         return jobs
     out: List[Job] = []
     for j in jobs:
-        if normalize_url(j.link) in ignore_links:
-            continue
         if ignore_cos and normalize_company(j.company) in ignore_cos:
             continue
         out.append(j)
@@ -209,6 +208,17 @@ def _send_email_for_jobs(
             print(reason)
             return 0
 
+    from job_agent.ignore_store import filter_dataframe_not_removed, filter_jobs_not_removed, filter_removed_dataframe_not_in_main
+
+    before_removed = len(email_jobs)
+    email_jobs = filter_jobs_not_removed(email_jobs, cfg)
+    dropped_removed = before_removed - len(email_jobs)
+    if dropped_removed:
+        print(
+            f"Digest: excluded {dropped_removed} job(s) on your removed/hide list from «Jobs in this digest».",
+            file=sys.stderr,
+        )
+
     if table_action != "restore" and not args.dry_run and not args.skip_network and uses_browser_search(cfg):
         if conn is not None:
             from job_agent.network import hydrate_reach_out_from_db
@@ -228,10 +238,10 @@ def _send_email_for_jobs(
             db.upsert_jobs(conn, email_jobs, mark_emailed=False)
 
     if jobs_df is not None and not jobs_df.empty:
-        df = jobs_df.copy()
+        df = filter_dataframe_not_removed(jobs_df.copy(), cfg)
     else:
         rows = [j.as_row() for j in email_jobs]
-        df = pd.DataFrame(rows)
+        df = filter_dataframe_not_removed(pd.DataFrame(rows), cfg)
     by_src: Dict[str, int] = {}
     for j in email_jobs:
         by_src[j.source] = by_src.get(j.source, 0) + 1
@@ -290,6 +300,7 @@ def _send_email_for_jobs(
             print("CV fit % column added (profile vs job description).", file=sys.stderr)
 
     if table_action != "restore" and job_tracker_enabled(cfg):
+        df = apply_tracker_to_digest_df(df, cfg, root=root)
         sync_digest_jobs_to_tracker(df, cfg, root=root)
         df = apply_tracker_to_digest_df(df, cfg, root=root)
 
@@ -301,7 +312,16 @@ def _send_email_for_jobs(
         if records:
             records = enrich_removed_records(records, cfg)
             removed_df = build_removed_jobs_dataframe(records)
-            print(f"Including {len(removed_df)} removed job(s) after main table.", file=sys.stderr)
+            before_dup = len(removed_df)
+            removed_df = filter_removed_dataframe_not_in_main(removed_df, df)
+            dup = before_dup - len(removed_df)
+            if dup:
+                print(
+                    f"Removed jobs table: dropped {dup} row(s) already listed in «Jobs in this digest».",
+                    file=sys.stderr,
+                )
+            if not removed_df.empty:
+                print(f"Including {len(removed_df)} removed job(s) after main table.", file=sys.stderr)
 
     attach_excel = bool(cfg.get("email_attach_excel", False))
     contacts_for_out = contacts_df if not contacts_df.empty else pd.DataFrame()
@@ -316,14 +336,21 @@ def _send_email_for_jobs(
     if digest_remove_enabled(cfg) and table_action == "remove":
         if ensure_remove_server_running(cfg):
             print(
-                "Digest action links enabled (Remove / Did U apply? → Yes).",
+                "Digest action links enabled (Remove / Status). "
+                "Server stays running after this command so links work when you open the email.",
                 file=sys.stderr,
             )
         else:
             print(
-                "Warning: digest server is not running — Remove / Apply links will not work. "
-                "Run: python3 run.py --digest-remove-server",
+                "Warning: digest remove server is not running — Remove / Status links will not work "
+                "until you run: python3 run.py --digest-remove-server",
                 file=sys.stderr,
+            )
+            digest_note = (
+                (digest_note + " ") if digest_note else ""
+            ) + (
+                "<strong>Remove links need the agent server on this Mac</strong> "
+                "(run <code>python3 run.py --digest-remove-server</code>)."
             )
 
     if table_action != "restore":
@@ -470,6 +497,22 @@ def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[
             batch = fetch_rss_jobs([u], cfg)
             label = u if len(u) <= 96 else u[:93] + "..."
             add_many(batch, f"RSS: {label}")
+
+    if only is None or "comeet" in only:
+        from job_agent.sources.comeet import comeet_enabled, fetch_comeet_company
+
+        if comeet_enabled(cfg):
+            block = cfg.get("comeet") if isinstance(cfg.get("comeet"), dict) else {}
+            for entry in block.get("companies") or []:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name") or entry.get("slug") or "Comeet").strip()
+                try:
+                    batch = fetch_comeet_company(entry, cfg)
+                except Exception as exc:
+                    print(f"Comeet ({name}): failed ({exc})", file=sys.stderr)
+                    batch = []
+                add_many(batch, f"Comeet: {name}")
 
     return jobs, stats
 
@@ -877,7 +920,16 @@ def run(argv: List[str] | None = None) -> int:
 
         stored_new = 0
         if not args.dry_run:
-            stored_new = db.upsert_jobs(conn, jobs, mark_emailed=False)
+            from job_agent.ignore_store import filter_jobs_not_removed
+
+            jobs_to_store = filter_jobs_not_removed(jobs, cfg)
+            skipped = len(jobs) - len(jobs_to_store)
+            if skipped:
+                print(
+                    f"Skipped upsert for {skipped} job(s) on your hide list.",
+                    file=sys.stderr,
+                )
+            stored_new = db.upsert_jobs(conn, jobs_to_store, mark_emailed=False)
 
         pending_count = len(db.load_pending_jobs(conn))
         print(
@@ -905,6 +957,7 @@ def run(argv: List[str] | None = None) -> int:
                 if j.link:
                     merged[normalize_url(j.link)] = j
             email_jobs = sorted(merged.values(), key=lambda x: (-x.score, x.title))
+            email_jobs = _finalize_jobs_for_digest(email_jobs, cfg)
 
         if not email_jobs:
             if only_new:

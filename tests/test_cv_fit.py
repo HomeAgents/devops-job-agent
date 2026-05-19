@@ -18,6 +18,25 @@ def test_format_cv_fit():
     assert format_cv_fit(None) == "NA"
 
 
+def test_compute_cv_fit_job_coverage_mode(tmp_path: Path):
+    cv = "DevOps Manager Kubernetes Terraform AWS CI/CD platform engineering director"
+    job = Job(
+        source="greenhouse:x",
+        company="Acme",
+        title="DevOps Director",
+        location="Israel",
+        link="https://boards.greenhouse.io/acme/jobs/1",
+        raw={"text": "Kubernetes Terraform AWS DevOps director platform engineering required."},
+    )
+    cfg = {
+        "cv_fit": {"min_job_text_chars": 40, "scoring_mode": "job_coverage"},
+        "scoring": {"keywords": ["DevOps"]},
+    }
+    pct = compute_cv_fit_percent(cv, job, cfg)
+    assert pct is not None
+    assert pct >= 50
+
+
 def test_compute_cv_fit_greenhouse_job(tmp_path: Path):
     cv = """
     DevOps Manager with 10 years experience. Kubernetes, Terraform, AWS, CI/CD,

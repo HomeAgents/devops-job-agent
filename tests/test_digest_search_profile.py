@@ -33,6 +33,23 @@ def test_search_profile_includes_linkedin_and_scoring():
     assert len(df) >= 4
 
 
+def test_search_profile_includes_comeet_when_enabled():
+    cfg = {
+        "location_hint": "Israel",
+        "comeet": {
+            "enabled": True,
+            "companies": [{"name": "arpeely", "board_url": "https://www.comeet.com/jobs/arpeely/57.001"}],
+        },
+        "google_web_browser": {"enabled": False},
+        "ats_google_site_search": {"enabled": False},
+    }
+    rows = build_search_profile_rows(cfg)
+    comeet = [r for r in rows if r[0] == "Comeet companies"]
+    assert len(comeet) == 1
+    assert "arpeely" in comeet[0][1]
+    assert "DevOps" in comeet[0][1]
+
+
 def test_merge_fetch_stats_unique_added():
     cfg = {
         "location_hint": "Israel",
@@ -58,3 +75,18 @@ def test_merge_fetch_stats_unique_added():
     assert gh["Unique added"] == "5"
     loc = merged[merged["Scope"] == "Location filter"].iloc[0]
     assert loc["Unique added"] == "—"
+
+
+def test_merge_comeet_fetch_stats_not_duplicated():
+    cfg = {
+        "location_hint": "Israel",
+        "comeet": {"enabled": True, "companies": [{"name": "arpeely"}]},
+        "google_web_browser": {"enabled": False},
+        "ats_google_site_search": {"enabled": False},
+    }
+    stats = pd.DataFrame([{"Site": "Comeet: arpeely", "Fetched": 8, "Unique added": 0}])
+    merged = build_search_profile_with_fetch_stats_df(cfg, stats)
+    comeet_rows = merged[merged["Scope"].str.contains("Comeet", na=False)]
+    assert len(comeet_rows) == 1
+    assert comeet_rows.iloc[0]["Keywords"] != "—"
+    assert comeet_rows.iloc[0]["Unique added"] == "0"

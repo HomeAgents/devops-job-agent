@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 import pandas as pd
 
 from job_agent.job_page_details import fetch_greenhouse_job_content_http
+from job_agent.linkedin_og import fetch_linkedin_job_snippet_http, is_linkedin_job_view_url
 from job_agent.models import Job
 from job_agent.util import normalize_url, strip_html
 
@@ -169,6 +170,19 @@ def job_description_text(job: Job, cfg: Dict[str, Any]) -> str:
         if gh:
             parts.append(strip_html(gh))
 
+    low_link = (job.link or "").lower()
+    if "comeet.co" in low_link or "comeet.com" in low_link:
+        from job_agent.sources.comeet import fetch_comeet_job_description_http
+
+        comeet_text = fetch_comeet_job_description_http(job.link, raw=raw)
+        if comeet_text:
+            parts.append(strip_html(comeet_text))
+
+    if is_linkedin_job_view_url(job.link or ""):
+        li_snippet = fetch_linkedin_job_snippet_http(job.link)
+        if li_snippet:
+            parts.append(li_snippet)
+
     combined = strip_html("\n".join(p for p in parts if p))
     combined = re.sub(r"\s+", " ", combined).strip()
     if len(combined) < min_chars:
@@ -196,13 +210,24 @@ def compute_cv_fit_percent(cv_text: str, job: Job, cfg: Dict[str, Any]) -> Optio
     if not cv_terms:
         return None
 
-    job_blob = f"{job.title}\n{job.company}\n{job_body}".lower()
-    matched = sum(1 for t in cv_terms if t in job_blob or (len(t) > 3 and t in job_blob))
-    # Also reward seniority alignment when title suggests leadership role
+    job_blob = f"{job.title}\n{job.company}\n{job.location}\n{job_body}"
+    job_terms = _terms_in_text(terms, job_blob)
+    matched = cv_terms & job_terms
+    if not matched:
+        return None
+
+    block = cfg.get("cv_fit") if isinstance(cfg.get("cv_fit"), dict) else {}
+    mode = str(block.get("scoring_mode") or "job_coverage").strip().lower()
+    if mode == "cv_coverage":
+        base = int(round(100 * len(matched) / max(1, len(cv_terms))))
+    else:
+        # What share of role-relevant terms mentioned in the posting you also have on your CV.
+        denom = max(len(job_terms), len(matched), 3)
+        base = int(round(100 * len(matched) / denom))
+
     title_low = (job.title or "").lower()
     senior_in_cv = any(x in cv_terms for x in ("manager", "director", "head", "lead", "vp", "מנהל"))
     senior_in_job = any(x in title_low for x in ("manager", "director", "head", "lead", "vp", "מנהל"))
-    base = int(round(100 * matched / max(1, len(cv_terms))))
     if senior_in_cv and senior_in_job:
         base = min(100, base + 5)
     elif senior_in_cv != senior_in_job:
@@ -235,6 +260,14 @@ def enrich_jobs_dataframe_with_cv_fit(
     for _, row in out.iterrows():
         link = normalize_url(str(row.get("Link") or "").strip())
         job = by_link.get(link)
+        if not job and link:
+            job = Job(
+                source=str(row.get("Source") or ""),
+                company=str(row.get("Company") or ""),
+                title=str(row.get("Job Title") or row.get("Title") or ""),
+                location=str(row.get("Location") or ""),
+                link=link,
+            )
         if not job or not cv_text:
             values.append("NA")
             continue
