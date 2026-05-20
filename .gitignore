@@ -1,17 +1,46 @@
+# Secrets and local env
 .env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
 venv/
+
+# Job data and exports (PII / your search history)
+*.db
+*.db-journal
 jobs_*.xlsx
 job_tracker.xlsx
 ~$*.xlsx
 job_tracker.xlsx.lock
-*.db
-*.db-journal
-.DS_Store
-.job-agent/
+*.pdf
 
-# LinkedIn connections export (PII) — path from config.network.linkedin_connections_csv
-network_export/*.csv
+# Local overrides (copy from config.json examples)
+config.local.json
+
+# Agent state under home dir — also ignore if copied into repo
+.job-agent/
+digest_ignore_links.json
+.last-digest-send.json
+comeet_credentials.json
+
+# Browser login profiles (LinkedIn / Google) if ever placed in repo
+browser/
+.browser-profile/
+
+# LinkedIn connections export (names, emails) — config.network.linkedin_connections_csv
+network_export/
+**/Connections.csv
+**/*connections*.csv
+
+# SSH / keys (should never be in repo)
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+.DS_Store
