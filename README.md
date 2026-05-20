@@ -39,6 +39,19 @@ Default root `config.json` may still be **v1/SerpAPI** until you copy the browse
 
 URLs are **normalized** (tracking query params stripped) for deduplication.
 
+## Personal data (never commit)
+
+| Gitignored | Contains |
+|------------|----------|
+| `.env` | Gmail password, API keys |
+| `jobs.db` | Fetched jobs and reach-out text |
+| `job_tracker.xlsx` | Digest tracker (Status, Remove, etc.) |
+| `*.pdf` | CV file (set `cv_fit.profile_path` in `config.json`) |
+| `~/.job-agent/` | Remove/hide list, browser login, send cooldown |
+| `network_export/*.csv` | LinkedIn Connections export |
+
+Use `config.local.json` for machine-specific overrides (also gitignored).
+
 ## Setup
 
 ```bash
