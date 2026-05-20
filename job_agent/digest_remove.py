@@ -219,18 +219,46 @@ def _apply_remove(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
         conn.close()
     added = add_removed_record(snapshot, cfg)
     title = snapshot.get("title") or link
+    root = _project_root(cfg)
+    tracker_note = ""
+    from job_agent.job_tracker_excel import (
+        default_job_tracker_path,
+        job_snapshot_from_removed_record,
+        job_tracker_enabled,
+        removed_status_label,
+        set_job_tracker_status,
+    )
+
+    if job_tracker_enabled(cfg):
+        try:
+            set_job_tracker_status(
+                link,
+                removed_status_label(cfg),
+                cfg,
+                root=root,
+                job_snapshot=job_snapshot_from_removed_record(snapshot),
+            )
+            tracker_note = (
+                f"<p>Status set to <strong>{html.escape(removed_status_label(cfg))}</strong> in "
+                f"<code>{html.escape(str(default_job_tracker_path(root, cfg)))}</code> "
+                f"(matched by link or title+company on future digests).</p>"
+            )
+        except ValueError as exc:
+            tracker_note = f"<p>Tracker update failed: {html.escape(str(exc))}</p>"
     if added:
         return (
             True,
             f"<p><strong>Removed.</strong> «{html.escape(str(title))}» will not appear in "
             f"<strong>Jobs in this digest</strong> on future emails.</p>"
             f"<p style=\"font-size:13px;color:#444;\">Saved to hide list"
-            f"{f'; cleared {deleted} row(s) from jobs.db' if deleted else ''}.</p>",
+            f"{f'; cleared {deleted} row(s) from jobs.db' if deleted else ''}.</p>"
+            f"{tracker_note}",
         )
     return (
         False,
         f"<p><strong>Already on hide list.</strong> «{html.escape(str(title))}» was already removed."
-        f"{f' Refreshed snapshot; cleared {deleted} row(s) from jobs.db.' if deleted else ''}</p>",
+        f"{f' Refreshed snapshot; cleared {deleted} row(s) from jobs.db.' if deleted else ''}</p>"
+        f"{tracker_note}",
     )
 
 

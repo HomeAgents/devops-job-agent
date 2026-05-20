@@ -163,8 +163,10 @@
       "New",
       "In Progress",
       "Interview",
-      "Rejected"
-    ]
+      "Rejected",
+      "Remove"
+    ],
+    "status_on_digest_remove": "Remove"
   },
   "email_table_headers": {
     "Link": "Job link / URL"

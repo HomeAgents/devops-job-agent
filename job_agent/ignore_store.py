@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Set
 
+from job_agent.job_dedupe import jobs_same_posting
 from job_agent.models import Job
 from job_agent.util import job_link_identity, job_links_same_posting, normalize_url
 
@@ -271,25 +272,29 @@ def filter_dataframe_not_removed(df: "Any", cfg: Dict[str, Any]) -> "Any":
     return df.loc[keep].reset_index(drop=True)
 
 
+def _job_from_digest_row(row: Dict[str, Any]) -> Job:
+    return Job(
+        source=str(row.get("Source") or ""),
+        company=str(row.get("Company") or ""),
+        title=str(row.get("Job Title") or row.get("Title") or ""),
+        location=str(row.get("Location") or ""),
+        link=str(row.get("Link") or ""),
+    )
+
+
 def filter_removed_dataframe_not_in_main(removed_df: "Any", main_df: "Any") -> "Any":
     """Ensure removed subsection does not repeat jobs from the main digest table."""
     import pandas as pd
 
     if removed_df is None or removed_df.empty:
         return removed_df
-    if main_df is None or main_df.empty or "Link" not in main_df.columns:
+    if main_df is None or main_df.empty:
         return removed_df
-    main_links = [normalize_url(str(x).strip()) for x in main_df["Link"] if str(x).strip()]
-    main_ids = {job_link_identity(x) for x in main_links}
+    main_jobs = [_job_from_digest_row(r.to_dict()) for _, r in main_df.iterrows()]
     keep_rows = []
     for _, row in removed_df.iterrows():
-        link = normalize_url(str(row.get("Link") or "").strip())
-        if not link:
-            keep_rows.append(row)
-            continue
-        if link in main_links:
-            continue
-        if job_link_identity(link) in main_ids:
+        removed_job = _job_from_digest_row(row.to_dict())
+        if any(jobs_same_posting(removed_job, main_job) for main_job in main_jobs):
             continue
         keep_rows.append(row)
     if not keep_rows:

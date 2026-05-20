@@ -18,12 +18,15 @@ from job_agent.excel_email import (
     TRACKER_COL_LAST_UPDATED,
     _rename_job_columns,
 )
+from job_agent.models import Job
+from job_agent.job_dedupe import jobs_same_posting
 from job_agent.util import job_links_same_posting, normalize_url
 
 STATUS_NEW = "New"
 STATUS_IN_PROGRESS = "In Progress"
 STATUS_INTERVIEW = "Interview"
 STATUS_REJECTED = "Rejected"
+STATUS_REMOVE = "Remove"
 
 # Canonical list for digest email + tracker (edit in config.json → job_tracker.status_values).
 DEFAULT_STATUS_VALUES: Sequence[str] = (
@@ -31,6 +34,7 @@ DEFAULT_STATUS_VALUES: Sequence[str] = (
     STATUS_IN_PROGRESS,
     STATUS_INTERVIEW,
     STATUS_REJECTED,
+    STATUS_REMOVE,
 )
 
 # Excel / CLI aliases → canonical label ("Rejected" = company said no; "Declined" accepted too).
@@ -42,6 +46,8 @@ STATUS_ALIASES: Dict[str, str] = {
     "reject": STATUS_REJECTED,
     "new": STATUS_NEW,
     "interview": STATUS_INTERVIEW,
+    "remove": STATUS_REMOVE,
+    "removed": STATUS_REMOVE,
 }
 
 
@@ -430,6 +436,24 @@ def set_job_tracker_status(
     if storage_key != link and storage_key in by_link:
         del by_link[storage_key]
     by_link[link] = row
+
+    if is_removed_tracker_status(canonical, cfg) and job_snapshot:
+        probe = Job(
+            source=str(job_snapshot.get("Source") or ""),
+            company=str(job_snapshot.get("Company") or ""),
+            title=str(job_snapshot.get("Job Title") or job_snapshot.get("Title") or ""),
+            location=str(job_snapshot.get("Location") or ""),
+            link=link,
+        )
+        for stored_link, existing in list(by_link.items()):
+            if stored_link == link:
+                continue
+            if job_matches_tracker_row(probe, existing, cfg):
+                existing = dict(existing)
+                existing["Status"] = canonical
+                existing[TRACKER_COL_LAST_UPDATED] = row[TRACKER_COL_LAST_UPDATED]
+                by_link[stored_link] = existing
+
     save_tracker_df(pd.DataFrame([by_link[k] for k in sorted(by_link.keys())]), cfg, root=root)
     return canonical
 
@@ -487,6 +511,99 @@ def apply_tracker_to_digest_df(jobs_df: pd.DataFrame, cfg: Dict[str, Any], *, ro
 
 def job_row_snapshot_from_df(row: pd.Series) -> Dict[str, Any]:
     return {c: row.get(c, "") for c in DIGEST_JOB_TABLE_COLUMNS if c in row.index}
+
+
+def removed_status_label(cfg: Dict[str, Any]) -> str:
+    block = cfg.get("job_tracker") if isinstance(cfg.get("job_tracker"), dict) else {}
+    raw = str(block.get("status_on_digest_remove") or STATUS_REMOVE).strip()
+    return raw or STATUS_REMOVE
+
+
+def is_removed_tracker_status(status: str, cfg: Dict[str, Any]) -> bool:
+    """True when tracker Status means «hidden from digest»."""
+    target = removed_status_label(cfg).casefold()
+    s = normalize_status_label(status, cfg, strict=False).casefold()
+    return s == target or s in ("remove", "removed")
+
+
+def job_matches_tracker_row(job: Job, row: Dict[str, Any], cfg: Dict[str, Any]) -> bool:
+    """Same posting: URL identity or matching title + company in tracker."""
+    row_title = str(row.get("Job Title") or row.get("Title") or "").strip()
+    row_company = str(row.get("Company") or "").strip()
+    stored_link = str(row.get("Link") or "").strip()
+    if not stored_link and not row_title and not row_company:
+        return False
+    other = Job(
+        source=str(row.get("Source") or ""),
+        company=row_company,
+        title=row_title,
+        location=str(row.get("Location") or ""),
+        link=stored_link,
+    )
+    return jobs_same_posting(job, other)
+
+
+def is_job_removed_in_tracker(job: Job, cfg: Dict[str, Any], *, root: Path) -> bool:
+    if not job_tracker_enabled(cfg):
+        return False
+    tracker = load_tracker_df(cfg, root=root)
+    if tracker.empty:
+        return False
+    for _, row in tracker.iterrows():
+        if not is_removed_tracker_status(str(row.get("Status") or ""), cfg):
+            continue
+        if job_matches_tracker_row(job, row.to_dict(), cfg):
+            return True
+    return False
+
+
+def filter_jobs_for_digest(jobs: List[Job], cfg: Dict[str, Any], *, root: Path) -> List[Job]:
+    """Exclude hide-list jobs and tracker rows with Status Remove (link or title+company)."""
+    from job_agent.ignore_store import is_link_ignored
+
+    out: List[Job] = []
+    for job in jobs:
+        if is_link_ignored(job.link, cfg):
+            continue
+        if is_job_removed_in_tracker(job, cfg, root=root):
+            continue
+        out.append(job)
+    return out
+
+
+def filter_dataframe_for_digest(df: pd.DataFrame, cfg: Dict[str, Any], *, root: Path) -> pd.DataFrame:
+    """Drop digest table rows that are on the hide list or marked Remove in job_tracker.xlsx."""
+    from job_agent.ignore_store import is_link_ignored
+
+    if df is None or df.empty:
+        return df
+    keep: List[bool] = []
+    for _, row in df.iterrows():
+        link = str(row.get("Link") or "").strip()
+        if is_link_ignored(link, cfg):
+            keep.append(False)
+            continue
+        job = Job(
+            source=str(row.get("Source") or ""),
+            company=str(row.get("Company") or ""),
+            title=str(row.get("Job Title") or row.get("Title") or ""),
+            location=str(row.get("Location") or ""),
+            link=link,
+        )
+        keep.append(not is_job_removed_in_tracker(job, cfg, root=root))
+    return df.loc[keep].reset_index(drop=True)
+
+
+def job_snapshot_from_removed_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Tracker row fields from a digest hide-list snapshot."""
+    return {
+        "Job Title": str(record.get("title") or ""),
+        "Company": str(record.get("company") or ""),
+        "Location": str(record.get("location") or ""),
+        "Link": normalize_url(str(record.get("link") or "")),
+        "Source": str(record.get("source") or ""),
+        "Network": "",
+    }
 
 
 def create_empty_job_tracker(

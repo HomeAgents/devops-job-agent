@@ -99,6 +99,8 @@ _STATUS_COLORS: Dict[str, str] = {
     "in progress": "#1565c0",
     "interview": "#2e7d32",
     "rejected": "#c62828",
+    "remove": "#757575",
+    "removed": "#757575",
 }
 # Removed jobs subsection: uniform gray text.
 _REMOVED_JOBS_ROW_COLOR = "#757575"
@@ -112,6 +114,8 @@ def _is_new_status(label: str, cfg: Dict[str, Any] | None = None) -> bool:
     s = (label or "").strip().lower()
     if not s or s == "new":
         return True
+    if s in ("remove", "removed"):
+        return False
     if cfg:
         from job_agent.job_tracker_excel import status_default_new
 

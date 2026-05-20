@@ -40,6 +40,7 @@ from job_agent.ignore_store import (
     load_removed_records,
     removed_records_to_jobs,
 )
+from job_agent.job_dedupe import dedupe_jobs
 from job_agent.util import normalize_url
 from job_agent.filters import annotate_search_fallback_for_blocked_domains, apply_job_filters
 from job_agent.location_filter import filter_jobs_by_location_hint
@@ -131,8 +132,13 @@ def _digest_only_new(cfg: Dict[str, Any]) -> bool:
     return bool(cfg.get("digest_email_only_new", False))
 
 
+def _digest_root(cfg: Dict[str, Any]) -> Path:
+    raw = str(cfg.get("_project_root") or "").strip()
+    return Path(raw).resolve() if raw else Path.cwd()
+
+
 def _apply_digest_ignore(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
-    from job_agent.ignore_store import filter_jobs_not_removed
+    from job_agent.job_tracker_excel import filter_jobs_for_digest
 
     raw_cos = cfg.get("digest_ignore_companies")
     ignore_cos = {
@@ -140,7 +146,7 @@ def _apply_digest_ignore(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
         for x in (raw_cos if isinstance(raw_cos, list) else [])
         if str(x).strip()
     }
-    jobs = filter_jobs_not_removed(jobs, cfg)
+    jobs = filter_jobs_for_digest(jobs, cfg, root=_digest_root(cfg))
     if not ignore_cos:
         return jobs
     out: List[Job] = []
@@ -151,25 +157,12 @@ def _apply_digest_ignore(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
     return out
 
 
-def _dedupe_jobs_by_link(jobs: List[Job]) -> List[Job]:
-    """One row per job URL; keep highest score, then title."""
-    best: Dict[str, Job] = {}
-    for j in jobs:
-        key = normalize_url(j.link)
-        if not key:
-            continue
-        prev = best.get(key)
-        if prev is None or (j.score, j.title) > (prev.score, prev.title):
-            best[key] = j
-    return sorted(best.values(), key=lambda x: (-x.score, x.title))
-
-
 def _finalize_jobs_for_digest(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
-    jobs = _dedupe_jobs_by_link(jobs)
+    jobs = dedupe_jobs(jobs)
     if cfg.get("digest_email_enforce_location_hint", True):
         jobs = filter_jobs_by_location_hint(jobs, cfg)
     jobs = apply_job_filters(jobs, cfg)
-    jobs = _dedupe_jobs_by_link(jobs)
+    jobs = dedupe_jobs(jobs)
     return _apply_digest_ignore(jobs, cfg)
 
 
@@ -208,14 +201,15 @@ def _send_email_for_jobs(
             print(reason)
             return 0
 
-    from job_agent.ignore_store import filter_dataframe_not_removed, filter_jobs_not_removed, filter_removed_dataframe_not_in_main
+    from job_agent.ignore_store import filter_removed_dataframe_not_in_main
+    from job_agent.job_tracker_excel import filter_dataframe_for_digest, filter_jobs_for_digest
 
     before_removed = len(email_jobs)
-    email_jobs = filter_jobs_not_removed(email_jobs, cfg)
+    email_jobs = filter_jobs_for_digest(email_jobs, cfg, root=root)
     dropped_removed = before_removed - len(email_jobs)
     if dropped_removed:
         print(
-            f"Digest: excluded {dropped_removed} job(s) on your removed/hide list from «Jobs in this digest».",
+            f"Digest: excluded {dropped_removed} job(s) (hide list or Status Remove in job_tracker.xlsx).",
             file=sys.stderr,
         )
 
@@ -238,10 +232,10 @@ def _send_email_for_jobs(
             db.upsert_jobs(conn, email_jobs, mark_emailed=False)
 
     if jobs_df is not None and not jobs_df.empty:
-        df = filter_dataframe_not_removed(jobs_df.copy(), cfg)
+        df = filter_dataframe_for_digest(jobs_df.copy(), cfg, root=root)
     else:
         rows = [j.as_row() for j in email_jobs]
-        df = filter_dataframe_not_removed(pd.DataFrame(rows), cfg)
+        df = filter_dataframe_for_digest(pd.DataFrame(rows), cfg, root=root)
     by_src: Dict[str, int] = {}
     for j in email_jobs:
         by_src[j.source] = by_src.get(j.source, 0) + 1
@@ -916,32 +910,43 @@ def run(argv: List[str] | None = None) -> int:
                 fetch_stats_df=fetch_stats_df,
                 cfg=cfg,
             )
-            return 0
-
-        stored_new = 0
-        if not args.dry_run:
-            from job_agent.ignore_store import filter_jobs_not_removed
-
-            jobs_to_store = filter_jobs_not_removed(jobs, cfg)
-            skipped = len(jobs) - len(jobs_to_store)
-            if skipped:
+            if args.fetch_only:
+                return 0
+            only_new_early = _digest_only_new(cfg) and not args.email_all_fetched
+            if only_new_early and not db.load_pending_jobs(conn):
+                print("No jobs to email (nothing pending). Use --email-all-fetched or set digest_email_only_new: false.")
+                return 0
+            if not only_new_early:
                 print(
-                    f"Skipped upsert for {skipped} job(s) on your hide list.",
+                    "Fetch returned no new jobs; will still build digest from jobs.db "
+                    f"(last {float(cfg.get('digest_include_jobs_seen_within_days') or 2):g} day(s)).",
                     file=sys.stderr,
                 )
-            stored_new = db.upsert_jobs(conn, jobs_to_store, mark_emailed=False)
+        else:
+            stored_new = 0
+            if not args.dry_run:
+                from job_agent.job_tracker_excel import filter_jobs_for_digest
 
-        pending_count = len(db.load_pending_jobs(conn))
-        print(
-            f"Fetch: {len(jobs)} job(s) after filters ({location_dropped} dropped by location); "
-            f"{stored_new} new in jobs.db; {pending_count} pending email.",
-        )
-        if not fetch_stats_df.empty:
-            print("\nSources checked (raw fetch counts):", file=sys.stderr)
-            print(fetch_stats_df.to_string(index=False), file=sys.stderr)
+                jobs_to_store = filter_jobs_for_digest(jobs, cfg, root=root)
+                skipped = len(jobs) - len(jobs_to_store)
+                if skipped:
+                    print(
+                        f"Skipped upsert for {skipped} job(s) on your hide list.",
+                        file=sys.stderr,
+                    )
+                stored_new = db.upsert_jobs(conn, jobs_to_store, mark_emailed=False)
 
-        if args.fetch_only:
-            return 0
+            pending_count = len(db.load_pending_jobs(conn))
+            print(
+                f"Fetch: {len(jobs)} job(s) after filters ({location_dropped} dropped by location); "
+                f"{stored_new} new in jobs.db; {pending_count} pending email.",
+            )
+            if not fetch_stats_df.empty:
+                print("\nSources checked (raw fetch counts):", file=sys.stderr)
+                print(fetch_stats_df.to_string(index=False), file=sys.stderr)
+
+            if args.fetch_only:
+                return 0
 
         only_new = _digest_only_new(cfg) and not args.email_all_fetched
         if only_new:
@@ -952,11 +957,7 @@ def run(argv: List[str] | None = None) -> int:
             # digest_email_only_new=false: this run's fetch + recent jobs.db rows (restored / still active).
             from_fetch = _finalize_jobs_for_digest(list(jobs), cfg)
             from_stored = _jobs_for_scheduled_digest(conn, cfg)
-            merged: Dict[str, Job] = {normalize_url(j.link): j for j in from_stored if j.link}
-            for j in from_fetch:
-                if j.link:
-                    merged[normalize_url(j.link)] = j
-            email_jobs = sorted(merged.values(), key=lambda x: (-x.score, x.title))
+            email_jobs = dedupe_jobs(from_stored + from_fetch)
             email_jobs = _finalize_jobs_for_digest(email_jobs, cfg)
 
         if not email_jobs:
