@@ -1,5 +1,7 @@
 # devops-job-agent
 
+**Repository:** https://github.com/HomeAgents/devops-job-agent
+
 Aggregates **DevOps Manager / Director** (and related) roles from several sources, dedupes against SQLite, writes an **Excel** digest, and optionally emails it via **Gmail SMTP**.
 
 ## Job search v2 — browser login (no SerpAPI)
