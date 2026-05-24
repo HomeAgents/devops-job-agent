@@ -43,7 +43,7 @@ class WakePollTests(unittest.TestCase):
         self.assertTrue(any("actionable" in r for r in reasons))
 
     @patch("orchestrator.wake_poll.fetch_unseen_envelopes")
-    def test_ignore_birthday_copilot(self, fetch: MagicMock) -> None:
+    def test_ignore_birthday_outbound_from_own_mailbox(self, fetch: MagicMock) -> None:
         fetch.return_value = [
             InboundMail(
                 message_id="1",
@@ -55,6 +55,21 @@ class WakePollTests(unittest.TestCase):
         ]
         ok, _ = has_actionable_unseen()
         self.assertFalse(ok)
+
+    @patch("orchestrator.wake_poll.fetch_unseen_envelopes")
+    def test_wake_on_birthday_approval_reply(self, fetch: MagicMock) -> None:
+        fetch.return_value = [
+            InboundMail(
+                message_id="2",
+                from_email="arkadiy.kats@gmail.com",
+                subject="Re: [Birthday Copilot] : VM Test User Birthday",
+                body_text="yes",
+                attachments=[],
+            )
+        ]
+        ok, reasons = has_actionable_unseen()
+        self.assertTrue(ok)
+        self.assertTrue(any("actionable" in r for r in reasons))
 
     @patch("orchestrator.wake_poll.vm_power_state", return_value="PowerState/running")
     @patch("orchestrator.wake_poll.has_actionable_unseen", return_value=(True, ["actionable"]))

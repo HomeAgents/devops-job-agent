@@ -8,10 +8,10 @@ from typing import Iterable
 
 from orchestrator.email_client import InboundMail, decode_subject
 
-# Other VM agents on the same mailbox (subject tags / sender names).
+# Outbound agent mail is skipped via from_addr == own mailbox (genie4cv).
+# Do not filter "[Birthday Copilot]" by subject — user approval replies keep that subject
+# and must wake the VM for birthday-copilot IMAP polling.
 _DEFAULT_IGNORE_SUBJECT_PATTERNS: tuple[str, ...] = (
-    r"\[birthday\s*copilot\]",
-    r"\bbirthday\s*copilot\b",
     r"\[scoutsignal\]",
     r"\bscoutsignal\s+report\b",
     r"delivery status notification",

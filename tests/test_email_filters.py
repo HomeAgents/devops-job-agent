@@ -14,7 +14,7 @@ class EmailFilterTests(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self._env)
 
-    def test_ignore_birthday_copilot_subject(self) -> None:
+    def test_ignore_birthday_copilot_sent_from_own_mailbox(self) -> None:
         mail = InboundMail(
             message_id="1",
             from_email="genie4cv@gmail.com",
@@ -23,7 +23,17 @@ class EmailFilterTests(unittest.TestCase):
             attachments=[],
         )
         self.assertTrue(is_ignored_inbound(mail))
-        self.assertIsNotNone(ignore_reason(mail))
+        self.assertIn("orchestrator mailbox", ignore_reason(mail) or "")
+
+    def test_allow_birthday_approval_reply_from_user(self) -> None:
+        mail = InboundMail(
+            message_id="1b",
+            from_email="arkadiy.kats@gmail.com",
+            subject="Re: [Birthday Copilot] : VM Test User Birthday",
+            body_text="yes",
+            attachments=[],
+        )
+        self.assertFalse(is_ignored_inbound(mail))
 
     def test_ignore_scoutsignal_subject(self) -> None:
         mail = InboundMail(

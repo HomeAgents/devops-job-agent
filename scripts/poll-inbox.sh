@@ -12,5 +12,8 @@ if [ ! -x "$PYTHON" ]; then
 fi
 [ -f .env ] && set -a && . .env && set +a
 [ -f orchestrator.env ] && set -a && . orchestrator.env && set +a
+if command -v az >/dev/null 2>&1; then
+  az login --identity --allow-no-subscriptions >/dev/null 2>&1 || true
+fi
 export ORCHESTRATOR_ACTIVITY_FILE="${ORCHESTRATOR_ACTIVITY_FILE:-${HOME}/orchestrator-data/last_activity}"
 "$PYTHON" run_orchestrator.py poll-inbox --idle-minutes "${ORCHESTRATOR_IDLE_MINUTES:-15}" >>"$LOG" 2>&1

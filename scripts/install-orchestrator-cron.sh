@@ -5,6 +5,7 @@ ROOT="${HOME}/apps/devops-job-agent"
 CRON_TMP=$(mktemp)
 {
   echo "CRON_TZ=Asia/Jerusalem"
+  echo "@reboot ${HOME}/apps/devops-job-agent/scripts/vm-boot-agents.sh"
   echo "0 9 * * * ${HOME}/apps/birthday-copilot-agent/scripts/morning-agents.sh"
   echo "5 9 * * * ${ROOT}/scripts/run-daily-jobs.sh"
   echo "*/5 * * * * ${ROOT}/scripts/poll-inbox.sh"
