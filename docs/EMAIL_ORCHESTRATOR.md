@@ -31,8 +31,18 @@ bash scripts/install-orchestrator-cron.sh
 ```
 
 - **09:00** — all users due today (DB `schedule_days`)
-- **\*/5** — poll inbox, reset idle timer, stop VM after 15 min quiet
+- **\*/5** — poll inbox, reset idle timer, stop VM after 15 min quiet (`ORCHESTRATOR_VM_AUTOSTOP=1`)
 - **19:00** — birthday / scoutsignal (existing)
+
+## Email wake while VM is off
+
+Deploy the Azure Function (timer + IMAP every 2 min):
+
+```bash
+cd infra/azure/email-wake-function && ./deploy.sh
+```
+
+See `infra/azure/email-wake-function/README.md`. Legacy Logic App / Automation notes: `infra/azure/email-wake-vm/README.md`.
 
 ## Setup on VM
 
@@ -71,4 +81,4 @@ Set `ORCHESTRATOR_MAX_PARALLEL=2` on D2s_v3.
 Gmail **App Password** for `genie4cv@gmail.com` (IMAP + SMTP).  
 Job-agent send still uses `GENIE4CV_SETTINGS` / `EMAIL_TO` override per user.
 
-# Email wake VM (Gmail → start vm-home-agents). See infra/azure/email-wake-vm/README.md
+# Email wake VM (Gmail → start vm-home-agents). See infra/azure/email-wake-function/README.md

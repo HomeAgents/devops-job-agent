@@ -1,0 +1,2 @@
+# Azure Functions Python worker reads this when publishing from repo root.
+pythonVersion: 3.11

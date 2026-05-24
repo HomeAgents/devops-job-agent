@@ -7,7 +7,7 @@ LA_START="la-start-home-agents-vm"
 
 echo "==> Gmail connection"
 az rest --method get \
-  --uri "/subscriptions/$(az account show -query id -o tsv)/resourceGroups/$RG/providers/Microsoft.Web/connections/gmail-genie4cv?api-version=2016-06-01" \
+  --uri "/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$RG/providers/Microsoft.Web/connections/gmail-genie4cv?api-version=2016-06-01" \
   --query "properties.statuses[0].status" -o tsv
 
 echo "==> Deploy start-VM Logic App (HTTP only — no Gmail in same workflow)"
@@ -38,5 +38,5 @@ echo "  la-start-home-agents-vm: Enabled (POST callback starts VM)"
 echo "  Gmail OAuth: Connected"
 echo ""
 echo "Note: @gmail.com consumer accounts cannot use Gmail trigger + HTTP in ONE Logic App."
-echo "Email wake while VM is off: use Azure Function (future) or keep VM running + poll-inbox cron."
+echo "Email wake while VM is off: deploy infra/azure/email-wake-function (Azure Function timer + IMAP)."
 echo "Callback URL stored in Automation variable OrchestratorWakeLogicAppUrl."

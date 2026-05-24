@@ -15,10 +15,19 @@
 
 ### Email wake while VM is off
 
-Until a Gmail→wake Function is added, either:
+**Production:** Azure Function `func-email-wake-home-agents` — timer + IMAP every 2 min → start VM.
 
-- Keep VM running (`ORCHESTRATOR_VM_AUTOSTOP=0`), or  
-- Manually start VM, or POST to `la-start-home-agents-vm` callback (stored in Automation variable `OrchestratorWakeLogicAppUrl`).
+```bash
+cd infra/azure/email-wake-function && ./deploy.sh
+```
+
+See `infra/azure/email-wake-function/README.md`.
+
+Legacy options (partial / blocked):
+
+- **`la-start-home-agents-vm`** — HTTP callback starts VM (used as Function fallback)
+- **`la-email-wake-home-agents`** (Gmail+HTTP) — blocked for consumer `@gmail.com` without BYO Google OAuth
+- **Automation IMAP runbook** — outbound 993 blocked in sandbox
 
 ## One-time deploy (Cloud Shell or any `az login`)
 
