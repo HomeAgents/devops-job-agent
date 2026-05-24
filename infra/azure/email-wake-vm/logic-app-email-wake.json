@@ -1,0 +1,189 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "logicAppName": {
+      "type": "string",
+      "defaultValue": "la-email-wake-home-agents"
+    },
+    "gmailConnectionName": {
+      "type": "string",
+      "defaultValue": "gmail-genie4cv"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "israelcentral"
+    },
+    "subscriptionId": {
+      "type": "string",
+      "defaultValue": "40f9da3f-642b-4815-9af4-4556e9114038"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "rg-home-agents"
+    },
+    "vmName": {
+      "type": "string",
+      "defaultValue": "vm-home-agents"
+    }
+  },
+  "variables": {
+    "gmailApiId": "[concat('/subscriptions/', parameters('subscriptionId'), '/providers/Microsoft.Web/locations/', parameters('location'), '/managedApis/gmail')]",
+    "gmailConnectionId": "[resourceId('Microsoft.Web/connections', parameters('gmailConnectionName'))]",
+    "vmStartUri": "[concat('https://management.azure.com/subscriptions/', parameters('subscriptionId'), '/resourceGroups/', parameters('resourceGroupName'), '/providers/Microsoft.Compute/virtualMachines/', parameters('vmName'), '/start?api-version=2024-07-01')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/connections",
+      "apiVersion": "2016-06-01",
+      "name": "[parameters('gmailConnectionName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "displayName": "genie4cv@gmail.com",
+        "api": {
+          "id": "[variables('gmailApiId')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('logicAppName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/connections', parameters('gmailConnectionName'))]"
+      ],
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            }
+          },
+          "triggers": {
+            "When_a_new_email_arrives": {
+              "recurrence": {
+                "frequency": "Minute",
+                "interval": 3
+              },
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['gmail']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "/v2/OnNewEmail",
+                "queries": {
+                  "folderPath": "Inbox",
+                  "importance": "Any",
+                  "fetchOnlyWithAttachment": false,
+                  "includeAttachments": false
+                }
+              }
+            }
+          },
+          "actions": {
+            "Skip_agent_or_system_mail": {
+              "actions": {
+                "Terminate_skipped": {
+                  "type": "Terminate",
+                  "inputs": {
+                    "runStatus": "Cancelled"
+                  }
+                }
+              },
+              "runAfter": {},
+              "else": {
+                "actions": {
+                  "Start_VM": {
+                    "type": "Http",
+                    "inputs": {
+                      "method": "POST",
+                      "uri": "[variables('vmStartUri')]",
+                      "authentication": {
+                        "type": "ManagedServiceIdentity"
+                      }
+                    }
+                  }
+                }
+              },
+              "expression": {
+                "or": [
+                  {
+                    "contains": [
+                      "@toLower(coalesce(triggerBody()?['From'], ''))",
+                      "genie4cv@gmail.com"
+                    ]
+                  },
+                  {
+                    "contains": [
+                      "@toLower(coalesce(triggerBody()?['Subject'], ''))",
+                      "birthday copilot"
+                    ]
+                  },
+                  {
+                    "contains": [
+                      "@toLower(coalesce(triggerBody()?['Subject'], ''))",
+                      "scoutsignal"
+                    ]
+                  },
+                  {
+                    "contains": [
+                      "@toLower(coalesce(triggerBody()?['From'], ''))",
+                      "mailer-daemon"
+                    ]
+                  }
+                ]
+              },
+              "type": "If"
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "gmail": {
+                "connectionId": "[variables('gmailConnectionId')]",
+                "connectionName": "[parameters('gmailConnectionName')]",
+                "id": "[variables('gmailApiId')]"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), 'vm-contributor')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/9980e02c-c2be-4d73-94e8-173b1dc7caf3')]",
+        "principalId": "[reference(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), '2019-05-01', 'Full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    }
+  ],
+  "outputs": {
+    "logicAppId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]"
+    },
+    "gmailConnectionPortalUrl": {
+      "type": "string",
+      "value": "[concat('https://portal.azure.com/#blade/HubsExtension/Resources/resourceId/', urlEncode(resourceId('Microsoft.Web/connections', parameters('gmailConnectionName'))), '/overview')]"
+    }
+  }
+}

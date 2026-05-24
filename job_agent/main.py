@@ -782,7 +782,12 @@ def run(argv: List[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
-    cfg = {**cfg, "_project_root": str(root)}
+    cfg = {
+        **cfg,
+        "_project_root": str(cfg.get("_project_root") or root),
+        "_jobs_db": str(cfg.get("_jobs_db") or args.db.resolve()),
+        "_config_path": str(args.config.resolve()),
+    }
     if getattr(args, "set_job_status", None):
         link, status = args.set_job_status
         if not job_tracker_enabled(cfg):

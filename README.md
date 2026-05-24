@@ -4,6 +4,19 @@
 
 Aggregates **DevOps Manager / Director** (and related) roles from several sources, dedupes against SQLite, writes an **Excel** digest, and optionally emails it via **Gmail SMTP**.
 
+## Email orchestrator (multi-user)
+
+Email-driven onboarding and scheduled digests via **genie4cv@gmail.com**. Rollback point before this work: git tag **`pre-email-orchestrator-v1`**.
+
+See **[docs/EMAIL_ORCHESTRATOR.md](docs/EMAIL_ORCHESTRATOR.md)** — poll inbox, per-user DB, 09:00 batch, Docker isolation, VM idle stop.
+
+```bash
+cp orchestrator.env.example orchestrator.env   # Gmail App Password
+python3 run_orchestrator.py poll-inbox
+python3 run_orchestrator.py daily
+bash scripts/install-orchestrator-cron.sh      # VM master crontab
+```
+
 ## Job search v2 — browser login (no SerpAPI)
 
 For **personal use**: LinkedIn Jobs with **your** session (Playwright), like WhatsApp Web — login once, reuse profile.

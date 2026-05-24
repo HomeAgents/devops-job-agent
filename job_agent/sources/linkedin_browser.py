@@ -949,17 +949,21 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(search_url, wait_until="domcontentloaded", timeout=90_000)
         try:
-            page.wait_for_selector('a[href*="/jobs/view/"]', timeout=25_000)
+            page.wait_for_selector('a[href*="/jobs/view/"]', timeout=35_000)
         except Exception:
             pass
-        time.sleep(3.0)
+        time.sleep(5.0)
 
         url_low = (page.url or "").lower()
         title_low = (page.title() or "").lower()
+        job_links = page.locator('a[href*="/jobs/view/"]').count()
         if (
-            ("login" in url_low or "signup" in title_low or "sign up" in title_low)
-            and "session_redirect" not in url_low
-            and page.locator('a[href*="/jobs/view/"]').count() == 0
+            ("authwall" in url_low or "uas/login" in url_low)
+            or (
+                ("login" in url_low or "sign up" in title_low)
+                and "session_redirect" not in url_low
+                and job_links == 0
+            )
         ):
             print(
                 "LinkedIn browser: not logged in (auth wall). Run: python3 run.py --linkedin-login",

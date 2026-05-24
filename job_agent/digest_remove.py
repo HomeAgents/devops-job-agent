@@ -7,11 +7,14 @@ import hashlib
 import hmac
 import html
 import json
+import os
+import re
 import socket
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
@@ -99,6 +102,85 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + pad)
 
 
+def _user_email_from_cfg(cfg: Dict[str, Any]) -> str:
+    return str(cfg.get("_user_email") or os.environ.get("EMAIL_TO") or "").strip().lower()
+
+
+def _sanitize_email(email: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9._-]+", "_", email.strip().lower())
+
+
+def orchestrator_users_root() -> Path:
+    return Path(os.getenv("ORCHESTRATOR_DATA_DIR", str(Path.home() / "orchestrator-data"))) / "users"
+
+
+def _load_user_cfg_from_path(cfg_path: Path) -> Optional[Dict[str, Any]]:
+    if not cfg_path.is_file():
+        return None
+    try:
+        from job_agent.main import load_config
+
+        return load_config(cfg_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def find_user_cfg_by_email(email: str) -> Optional[Dict[str, Any]]:
+    safe = _sanitize_email(email)
+    if not safe:
+        return None
+    return _load_user_cfg_from_path(orchestrator_users_root() / safe / "config.json")
+
+
+def _link_in_jobs_db(link: str, db_path: Path) -> bool:
+    from job_agent import db as job_db
+
+    if not link or not db_path.is_file():
+        return False
+    conn = job_db.connect(db_path)
+    try:
+        return job_db.load_job_by_link(conn, link) is not None
+    finally:
+        conn.close()
+
+
+def find_user_cfg_for_link(link: str) -> Optional[Dict[str, Any]]:
+    key = normalize_url((link or "").strip())
+    if not key:
+        return None
+    users_root = orchestrator_users_root()
+    if not users_root.is_dir():
+        return None
+    for user_dir in sorted(users_root.iterdir()):
+        if not user_dir.is_dir():
+            continue
+        cfg_path = user_dir / "config.json"
+        jobs_db = user_dir / "jobs.db"
+        if not cfg_path.is_file():
+            continue
+        if jobs_db.is_file() and _link_in_jobs_db(key, jobs_db):
+            return _load_user_cfg_from_path(cfg_path)
+    return None
+
+
+def resolve_cfg_for_token(token: str, default_cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[str]]:
+    """Verify token and pick the per-user config (multi-tenant orchestrator)."""
+    payload, err = _decode_action_token(token, default_cfg)
+    if err or not payload:
+        return default_cfg, None, err
+    user = str(payload.get("user") or "").strip().lower()
+    if user:
+        cfg = find_user_cfg_by_email(user)
+        if cfg:
+            return cfg, payload, None
+    link = normalize_url(str(payload.get("link") or "").strip())
+    if link:
+        cfg = find_user_cfg_for_link(link)
+        if cfg:
+            return cfg, payload, None
+    return default_cfg, payload, None
+
+
 def sign_action_token(
     link: str,
     cfg: Dict[str, Any],
@@ -106,6 +188,7 @@ def sign_action_token(
     action: Action = "remove",
     status: str = "",
     ttl_days: int = 90,
+    user_email: str = "",
 ) -> str:
     payload: Dict[str, Any] = {
         "link": normalize_url(link.strip()),
@@ -114,6 +197,9 @@ def sign_action_token(
     }
     if status.strip():
         payload["status"] = status.strip()
+    email = (user_email or _user_email_from_cfg(cfg)).strip().lower()
+    if email:
+        payload["user"] = email
     body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
     sig = hmac.new(remove_secret(cfg).encode(), body.encode(), hashlib.sha256).hexdigest()[:32]
     return f"{body}.{sig}"
@@ -191,13 +277,17 @@ def build_set_status_url(link: str, status: str, cfg: Dict[str, Any]) -> str:
     return f"{remove_base_url(cfg)}/status?t={token}"
 
 
-def _html_page(title: str, body: str, *, status: int = 200) -> bytes:
+def _html_page(title: str, body: str, *, status: int = 200, cfg: Optional[Dict[str, Any]] = None) -> bytes:
+    if cfg and digest_remove_enabled(cfg):
+        hint = f"Job Agent — action links are served from {html.escape(remove_base_url(cfg))}."
+    else:
+        hint = "Job Agent — action links must reach your job-agent remove server (see digest_remove.base_url in config)."
     page = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{title}</title></head>
 <body style="font-family:sans-serif;max-width:42em;margin:2em auto;line-height:1.5;">
 <h1>{title}</h1>
 {body}
-<p style="color:#666;font-size:13px;">Job Agent — this link only works on the Mac where the remove server runs.</p>
+<p style="color:#666;font-size:13px;">{hint}</p>
 </body></html>"""
     return page.encode("utf-8")
 
@@ -269,10 +359,19 @@ def _project_root(cfg: Dict[str, Any]) -> "Path":
     return Path(raw).resolve() if raw else Path.cwd().resolve()
 
 
+def _jobs_db_path(cfg: Dict[str, Any]) -> "Path":
+    from pathlib import Path
+
+    explicit = str(cfg.get("_jobs_db") or "").strip()
+    if explicit:
+        return Path(explicit)
+    return _project_root(cfg) / "jobs.db"
+
+
 def _db_connect(cfg: Dict[str, Any]):
     from job_agent import db as job_db
 
-    return job_db.connect(_project_root(cfg) / "jobs.db")
+    return job_db.connect(_jobs_db_path(cfg))
 
 
 def _apply_set_status(link: str, status: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
@@ -368,7 +467,7 @@ class _RemoveHandler(BaseHTTPRequestHandler):
         print(f"[digest-remove] {self.address_string()} {fmt % args}", file=sys.stderr)
 
     def _send_html(self, status: int, title: str, body: str) -> None:
-        data = _html_page(title, body, status=status)
+        data = _html_page(title, body, status=status, cfg=self.cfg)
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
@@ -397,46 +496,80 @@ class _RemoveHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         route = self._route_path(parsed)
         if route == "/health":
+            users = 0
+            if orchestrator_users_root().is_dir():
+                users = sum(1 for d in orchestrator_users_root().iterdir() if d.is_dir())
+            multi = f"<p>Multi-user: {users} profile(s) under <code>{html.escape(str(orchestrator_users_root()))}</code>.</p>" if users else ""
             self._send_html(
                 200,
                 "OK",
                 "<p>Remove / restore / apply server is running.</p>"
                 "<p>Routes: <code>/remove</code>, <code>/restore</code>, <code>/apply</code>, "
-                "<code>/status</code></p>",
+                "<code>/status</code></p>"
+                f"{multi}",
             )
             return
         qs = parse_qs(parsed.query)
         token = (qs.get("t") or [""])[0]
         if route == "/remove":
-            link, err = verify_action_token(token, self.cfg, expected="remove")
-            if err or not link:
+            cfg, payload, err = resolve_cfg_for_token(token, self.cfg)
+            if err or not payload:
                 self._send_html(400, "Could not remove", f"<p>{err or 'Unknown error'}.</p>")
                 return
-            _, msg = _apply_remove(link, self.cfg)
+            if str(payload.get("action") or "").strip().lower() != "remove":
+                self._send_html(400, "Could not remove", "<p>Invalid action (expected remove).</p>")
+                return
+            link = normalize_url(str(payload.get("link") or ""))
+            if not link:
+                self._send_html(400, "Could not remove", "<p>Missing job link.</p>")
+                return
+            _, msg = _apply_remove(link, cfg)
             self._send_html(200, "Job hidden", f"{msg}<p style=\"word-break:break-all;font-size:13px;\">{link}</p>")
             return
         if route == "/restore":
-            link, err = verify_action_token(token, self.cfg, expected="restore")
-            if err or not link:
+            cfg, payload, err = resolve_cfg_for_token(token, self.cfg)
+            if err or not payload:
                 self._send_html(400, "Could not restore", f"<p>{err or 'Unknown error'}.</p>")
                 return
-            _, msg = _apply_restore(link, self.cfg)
+            if str(payload.get("action") or "").strip().lower() != "restore":
+                self._send_html(400, "Could not restore", "<p>Invalid action (expected restore).</p>")
+                return
+            link = normalize_url(str(payload.get("link") or ""))
+            if not link:
+                self._send_html(400, "Could not restore", "<p>Missing job link.</p>")
+                return
+            _, msg = _apply_restore(link, cfg)
             self._send_html(200, "Job restored", f"{msg}<p style=\"word-break:break-all;font-size:13px;\">{link}</p>")
             return
         if route == "/apply":
-            link, err = verify_action_token(token, self.cfg, expected="apply")
-            if err or not link:
+            cfg, payload, err = resolve_cfg_for_token(token, self.cfg)
+            if err or not payload:
                 self._send_html(400, "Could not mark applied", f"<p>{err or 'Unknown error'}.</p>")
                 return
-            _, msg = _apply_mark_applied(link, self.cfg)
+            if str(payload.get("action") or "").strip().lower() != "apply":
+                self._send_html(400, "Could not mark applied", "<p>Invalid action (expected apply).</p>")
+                return
+            link = normalize_url(str(payload.get("link") or ""))
+            if not link:
+                self._send_html(400, "Could not mark applied", "<p>Missing job link.</p>")
+                return
+            _, msg = _apply_mark_applied(link, cfg)
             self._send_html(200, "Marked applied", f"{msg}<p style=\"word-break:break-all;font-size:13px;\">{link}</p>")
             return
         if route == "/status":
-            link, status, err = verify_set_status_token(token, self.cfg)
-            if err or not link or not status:
+            cfg, payload, err = resolve_cfg_for_token(token, self.cfg)
+            if err or not payload:
                 self._send_html(400, "Could not update status", f"<p>{err or 'Unknown error'}.</p>")
                 return
-            _, msg = _apply_set_status(link, status, self.cfg)
+            if str(payload.get("action") or "").strip().lower() != "set_status":
+                self._send_html(400, "Could not update status", "<p>Invalid action (expected set_status).</p>")
+                return
+            link = normalize_url(str(payload.get("link") or ""))
+            status = str(payload.get("status") or "").strip()
+            if not link or not status:
+                self._send_html(400, "Could not update status", "<p>Missing job link or status.</p>")
+                return
+            _, msg = _apply_set_status(link, status, cfg)
             self._send_html(200, "Status updated", f"{msg}<p style=\"word-break:break-all;font-size:13px;\">{link}</p>")
             return
         self._send_html(404, "Not found", "<p>Unknown path.</p>")
@@ -507,21 +640,31 @@ def _remove_server_log_path(cfg: Dict[str, Any]) -> "Path":
 
 def _spawn_detached_remove_server(cfg: Dict[str, Any]) -> bool:
     """Start remove/status server in a separate process (survives after digest exits)."""
+    import os
     import subprocess
     import sys
+    from pathlib import Path
 
     root = _project_root(cfg)
-    run_py = root / "run.py"
+    app_root = Path(__file__).resolve().parent.parent
+    run_py = app_root / "run.py"
+    if not run_py.is_file():
+        run_py = root / "run.py"
     if not run_py.is_file():
         print(f"digest-remove: cannot find {run_py}", file=sys.stderr)
         return False
     log_path = _remove_server_log_path(cfg)
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    config_path = str(cfg.get("_config_path") or os.environ.get("JOB_AGENT_CONFIG") or "").strip()
+    if config_path:
+        env["JOB_AGENT_CONFIG"] = config_path
     try:
         with open(log_path, "a", encoding="utf-8") as logf:
             subprocess.Popen(
                 [sys.executable, str(run_py), "--digest-remove-server"],
-                cwd=str(root),
+                cwd=str(app_root if (app_root / "job_agent").is_dir() else root),
+                env=env,
                 start_new_session=True,
                 stdin=subprocess.DEVNULL,
                 stdout=logf,

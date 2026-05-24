@@ -17,7 +17,7 @@ from job_agent.digest_remove import (
     digest_remove_enabled,
     job_tracker_digest_columns_enabled,
 )
-from job_agent.cv_fit import CV_FIT_COLUMN
+from job_agent.cv_fit import CV_FIT_COLUMN, cv_fit_column_name
 from job_agent.digest_search_profile import build_search_profile_with_fetch_stats_df
 from job_agent.ignore_store import merge_ignore_links
 DigestTableAction = Literal["remove", "restore"]
@@ -647,7 +647,7 @@ def _build_digest_plain(
         "",
     ]
     lines += [
-        "Jobs (sorted by company name):",
+        "Jobs (sorted by CV fit, then company name):",
         "",
     ]
     job_cols = _REMOVED_JOBS_EMAIL_COLUMNS if table_action == "restore" else _EMAIL_JOB_COLUMNS
@@ -692,21 +692,58 @@ def _build_digest_plain(
     return "\n".join(lines).strip()
 
 
-def _sort_digest_jobs_by_company(jobs_df: pd.DataFrame) -> pd.DataFrame:
-    if jobs_df.empty or "Company" not in jobs_df.columns:
+def _cv_fit_sort_values(series: pd.Series) -> pd.Series:
+    """Numeric sort key from «CV fit %» cells (e.g. 85%, NA). NA sorts last."""
+
+    def parse(raw: object) -> float:
+        s = str(raw or "").strip().rstrip("%")
+        if not s or s.upper() == "NA":
+            return -1.0
+        try:
+            return float(s)
+        except ValueError:
+            return -1.0
+
+    return series.map(parse)
+
+
+def _sort_digest_jobs(jobs_df: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+    if jobs_df.empty:
         return jobs_df
-    by = ["Company"]
-    if "Job Title" in jobs_df.columns:
+
+    df = jobs_df.copy()
+    by: List[str] = []
+    ascending: List[bool] = []
+
+    cv_col = cv_fit_column_name(cfg or {})
+    if cv_col not in df.columns and CV_FIT_COLUMN in df.columns:
+        cv_col = CV_FIT_COLUMN
+    if cv_col in df.columns:
+        df["_cv_fit_sort"] = _cv_fit_sort_values(df[cv_col])
+        by.append("_cv_fit_sort")
+        ascending.append(False)
+
+    if "Company" in df.columns:
+        by.append("Company")
+        ascending.append(True)
+    if "Job Title" in df.columns:
         by.append("Job Title")
-    return (
-        jobs_df.sort_values(
-            by,
-            key=lambda col: col.astype(str).str.strip().str.casefold(),
-            ascending=True,
-            na_position="last",
-        )
+        ascending.append(True)
+
+    if not by:
+        return jobs_df
+
+    def _sort_key(col: pd.Series) -> pd.Series:
+        if col.name == "_cv_fit_sort":
+            return col
+        return col.astype(str).str.strip().str.casefold()
+
+    out = (
+        df.sort_values(by, ascending=ascending, key=_sort_key, na_position="last")
+        .drop(columns=["_cv_fit_sort"], errors="ignore")
         .reset_index(drop=True)
     )
+    return out
 
 
 def save_excel(
@@ -756,7 +793,7 @@ def send_digest_email(
 ) -> None:
     """Send multipart digest: plain text + HTML table in body; optional .xlsx attachment."""
     cfg = cfg or {}
-    jobs_df = _sort_digest_jobs_by_company(jobs_df.copy())
+    jobs_df = _sort_digest_jobs(jobs_df.copy(), cfg)
     net = network_df if network_df is not None else pd.DataFrame()
     fstats = fetch_stats_df if fetch_stats_df is not None else pd.DataFrame()
     dsrc = digest_by_source_df if digest_by_source_df is not None else pd.DataFrame()
