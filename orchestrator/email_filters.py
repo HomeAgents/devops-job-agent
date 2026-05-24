@@ -33,6 +33,8 @@ def _own_mailbox() -> str:
         os.getenv("ORCHESTRATOR_SMTP_USER")
         or os.getenv("ORCHESTRATOR_IMAP_USER")
         or os.getenv("GMAIL_EMAIL")
+        or os.getenv("EMAIL_USER")
+        or os.getenv("EMAIL_TO")
         or ""
     ).strip().lower()
 

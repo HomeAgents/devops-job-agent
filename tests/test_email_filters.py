@@ -8,7 +8,10 @@ from orchestrator.email_filters import ignore_reason, is_ignored_inbound
 class EmailFilterTests(unittest.TestCase):
     def setUp(self) -> None:
         self._env = os.environ.copy()
-        os.environ["ORCHESTRATOR_SMTP_USER"] = "genie4cv@gmail.com"
+        os.environ.pop("ORCHESTRATOR_SMTP_USER", None)
+        os.environ.pop("ORCHESTRATOR_IMAP_USER", None)
+        os.environ.pop("GMAIL_EMAIL", None)
+        os.environ["EMAIL_USER"] = "genie4cv@gmail.com"
 
     def tearDown(self) -> None:
         os.environ.clear()
@@ -50,6 +53,16 @@ class EmailFilterTests(unittest.TestCase):
             message_id="3",
             from_email="mailer-daemon@googlemail.com",
             subject="Delivery Status Notification (Failure)",
+            body_text="",
+            attachments=[],
+        )
+        self.assertTrue(is_ignored_inbound(mail))
+
+    def test_ignore_own_mailbox_via_email_user_env(self) -> None:
+        mail = InboundMail(
+            message_id="0",
+            from_email="genie4cv@gmail.com",
+            subject="DevOps digest",
             body_text="",
             attachments=[],
         )
