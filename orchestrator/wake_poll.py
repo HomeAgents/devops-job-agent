@@ -162,7 +162,11 @@ def _start_via_logic_app() -> bool:
 
 def start_vm_if_needed() -> tuple[bool, str]:
     """Start VM when not running/starting. Returns (started_or_already_up, detail)."""
-    state = vm_power_state()
+    try:
+        state = vm_power_state()
+    except Exception as exc:
+        log.warning("Could not read VM power state (%s); will attempt wake anyway", exc)
+        state = "PowerState/unknown"
     if state in _RUNNING:
         return False, f"already_{state}"
     if _start_via_logic_app():

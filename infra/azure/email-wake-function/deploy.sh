@@ -85,6 +85,8 @@ az functionapp config appsettings set -g "$RG" -n "$FA" --settings \
   "AZURE_VM_RG=$RG" \
   "AZURE_VM_NAME=$VM_NAME" \
   "WAKE_LOGIC_APP_URL=$CALLBACK" \
+  "SCM_DO_BUILD_DURING_DEPLOYMENT=true" \
+  "ENABLE_ORYX_BUILD=true" \
   -o none
 
 echo "==> Build deployment package"
@@ -95,6 +97,15 @@ mkdir -p "$STAGING/orchestrator"
 for f in __init__.py wake_poll.py email_filters.py email_client.py; do
   cp "$ROOT/orchestrator/$f" "$STAGING/orchestrator/"
 done
+echo "==> Install Linux dependencies into package"
+PY="${ROOT}/.venv/bin/python3"
+if [[ ! -x "$PY" ]]; then PY="$(command -v python3)"; fi
+"$PY" -m pip install -q -r "$STAGING/requirements.txt" \
+  --target "$STAGING/.python_packages/lib/site-packages" \
+  --platform manylinux2014_x86_64 --python-version 3.11 \
+  --implementation cp --only-binary=:all: 2>/dev/null \
+  || "$PY" -m pip install -q -r "$STAGING/requirements.txt" \
+    --target "$STAGING/.python_packages/lib/site-packages"
 (
   cd "$STAGING"
   zip -qr deploy.zip .
