@@ -71,10 +71,35 @@ def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+_KNOWN_TOP_KEYS = {
+    "linkedin", "google_web_browser", "ats_google_site_search", "serpapi_features",
+    "greenhouse_boards", "lever_sites", "rss_feeds", "comeet", "scoring", "location_hint",
+    "digest_remove", "digest_ignore_links", "digest_ignore_companies",
+    "digest_min_minutes_between_sends", "digest_include_jobs_seen_within_days",
+    "digest_email_subjects", "digest_send_state_file", "browser", "cv_fit",
+    "job_tracker", "network", "_project_root", "_jobs_db", "_user_email", "_config_path",
+}
+
+
+def _validate_config(cfg: Dict[str, Any]) -> None:
+    unknown = set(cfg.keys()) - _KNOWN_TOP_KEYS
+    trivial = {k for k in unknown if k.startswith("_")}
+    unknown -= trivial
+    if unknown:
+        print(f"Config warning: unknown top-level keys {sorted(unknown)}", file=sys.stderr)
+    li = cfg.get("linkedin")
+    if isinstance(li, dict) and li.get("enabled", True):
+        js = li.get("jobs_search")
+        if not isinstance(js, dict) or not js.get("keywords"):
+            print("Config warning: linkedin.jobs_search.keywords is empty", file=sys.stderr)
+
+
 def load_config(path: Path) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    _validate_config(cfg)
+    return cfg
 
 
 def parse_sources_arg(raw: str | None) -> Set[str] | None:
@@ -423,7 +448,7 @@ def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[
     seen: Set[str] = set()
     stats: List[Dict[str, Any]] = []
 
-    def add_many(new: List[Job], site_label: str) -> None:
+    def add_many(new: List[Job], site_label: str, *, error: str = "") -> None:
         fetched = len(new)
         added_here = 0
         for j in new:
@@ -431,7 +456,10 @@ def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[
                 seen.add(j.link)
                 jobs.append(j)
                 added_here += 1
-        stats.append({"Site": site_label, "Fetched": fetched, "Unique added": added_here})
+        row: Dict[str, Any] = {"Site": site_label, "Fetched": fetched, "Unique added": added_here}
+        if error:
+            row["Error"] = error
+        stats.append(row)
 
     if only:
         if not uses_browser_search(cfg):
@@ -443,28 +471,34 @@ def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[
         li = cfg.get("linkedin")
         li_on = isinstance(li, dict) and li.get("enabled", True)
         if li_on and (only is None or "linkedin" in only or "linkedin_browser" in only):
+            _err = ""
             try:
                 batch = fetch_linkedin_jobs(cfg)
             except Exception as exc:
                 print(f"LinkedIn (browser): failed ({exc})", file=sys.stderr)
                 batch = []
-            add_many(batch, "LinkedIn (browser)")
+                _err = str(exc)
+            add_many(batch, "LinkedIn (browser)", error=_err)
         if li_on and (only is None or "linkedin" in only or "linkedin_posts" in only):
+            _err = ""
             try:
                 batch = fetch_linkedin_posts(cfg)
             except Exception as exc:
                 print(f"LinkedIn posts (browser): failed ({exc})", file=sys.stderr)
                 batch = []
-            add_many(batch, "LinkedIn posts (browser)")
+                _err = str(exc)
+            add_many(batch, "LinkedIn posts (browser)", error=_err)
         gw = cfg.get("google_web_browser")
         gw_on = isinstance(gw, dict) and gw.get("enabled", True)
         if gw_on and (only is None or "google" in only or "google_browser" in only or "google_web" in only):
+            _err = ""
             try:
                 batch = fetch_google_web_browser(cfg)
             except Exception as exc:
                 print(f"Google (browser): failed ({exc})", file=sys.stderr)
                 batch = []
-            add_many(batch, "Google (browser web)")
+                _err = str(exc)
+            add_many(batch, "Google (browser web)", error=_err)
     elif serpapi_feature_enabled("google_jobs", cfg) and (only is None or "serpapi" in only or "google_jobs" in only):
         batch = fetch_google_jobs(build_serpapi_queries(cfg), cfg)
         add_many(batch, "SerpAPI: Google Jobs")
@@ -509,12 +543,14 @@ def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[
                 if not isinstance(entry, dict):
                     continue
                 name = str(entry.get("name") or entry.get("slug") or "Comeet").strip()
+                _err = ""
                 try:
                     batch = fetch_comeet_company(entry, cfg)
                 except Exception as exc:
                     print(f"Comeet ({name}): failed ({exc})", file=sys.stderr)
                     batch = []
-                add_many(batch, f"Comeet: {name}")
+                    _err = str(exc)
+                add_many(batch, f"Comeet: {name}", error=_err)
 
     return jobs, stats
 

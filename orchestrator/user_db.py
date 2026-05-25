@@ -4,7 +4,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -255,9 +255,13 @@ class UserDB:
                 out.append(user)
         return out
 
-    def known_message_ids(self) -> set[str]:
+    def known_message_ids(self, lookback_days: int = 30) -> set[str]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
         with self.connect() as conn:
-            rows = conn.execute("SELECT message_id FROM inbound_log").fetchall()
+            rows = conn.execute(
+                "SELECT message_id FROM inbound_log WHERE received_at >= ? OR received_at IS NULL",
+                (cutoff,),
+            ).fetchall()
         return {str(r[0]) for r in rows if r[0]}
 
     def log_inbound(self, message_id: str, from_email: str, subject: str) -> bool:

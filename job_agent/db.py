@@ -16,6 +16,7 @@ def _utc_now_iso() -> str:
 
 def connect(db_path: Path | str = "jobs.db") -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("CREATE TABLE IF NOT EXISTS jobs (link TEXT PRIMARY KEY)")
     _ensure_schema(conn)
     return conn

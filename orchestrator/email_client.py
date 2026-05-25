@@ -5,6 +5,7 @@ import imaplib
 import os
 import re
 import smtplib
+import sys
 from dataclasses import dataclass
 from email.header import decode_header, make_header
 from email.message import EmailMessage
@@ -236,8 +237,13 @@ def fetch_inbound(
 
         candidates = ordered[-max_messages:]
         for num in candidates:
-            typ, msg_data = imap.fetch(num, "(RFC822)")
+            try:
+                typ, msg_data = imap.fetch(num, "(RFC822)")
+            except Exception as exc:
+                print(f"IMAP fetch error for msg {num}: {exc}", file=sys.stderr)
+                continue
             if typ != "OK" or not msg_data:
+                print(f"IMAP fetch non-OK for msg {num}: typ={typ}", file=sys.stderr)
                 continue
             raw = msg_data[0][1]
             msg = email.message_from_bytes(raw)

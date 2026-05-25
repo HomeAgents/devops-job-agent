@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import collections
 import hashlib
 import hmac
 import html
@@ -64,22 +65,29 @@ def job_tracker_apply_enabled(cfg: Dict[str, Any]) -> bool:
 
 def remove_secret(cfg: Dict[str, Any]) -> str:
     block = _digest_remove_block(cfg)
+    base_secret = ""
     for key in ("secret",):
         v = (block.get(key) or "").strip()
         if v:
-            return v
-    env = get_setting("JOB_AGENT_REMOVE_SECRET", "DIGEST_REMOVE_SECRET").strip()
-    if env:
-        return env
-    print(
-        "WARNING: No HMAC secret configured for digest action links. "
-        "Set JOB_AGENT_REMOVE_SECRET env var or digest_remove.secret in config. "
-        "Using auto-derived fallback (predictable from filesystem path).",
-        file=sys.stderr,
-    )
-    path = ignore_store_path(cfg)
-    seed = f"job-agent-remove:{path}"
-    return hashlib.sha256(seed.encode()).hexdigest()
+            base_secret = v
+            break
+    if not base_secret:
+        env = get_setting("JOB_AGENT_REMOVE_SECRET", "DIGEST_REMOVE_SECRET").strip()
+        if env:
+            base_secret = env
+    if not base_secret:
+        print(
+            "WARNING: No HMAC secret configured for digest action links. "
+            "Set JOB_AGENT_REMOVE_SECRET env var or digest_remove.secret in config. "
+            "Using auto-derived fallback (predictable from filesystem path).",
+            file=sys.stderr,
+        )
+        path = ignore_store_path(cfg)
+        base_secret = hashlib.sha256(f"job-agent-remove:{path}".encode()).hexdigest()
+    user_email = _user_email_from_cfg(cfg).strip().lower()
+    if user_email:
+        return hashlib.sha256(f"{base_secret}:{user_email}".encode()).hexdigest()
+    return base_secret
 
 
 def remove_base_url(cfg: Dict[str, Any]) -> str:
@@ -468,6 +476,27 @@ def _apply_restore(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
     )
 
 
+_RATE_LIMIT_WINDOW = 60
+_RATE_LIMIT_MAX = 30
+_rate_lock = threading.Lock()
+_rate_hits: Dict[str, collections.deque] = {}
+
+
+def _rate_limited(ip: str) -> bool:
+    now = time.monotonic()
+    with _rate_lock:
+        dq = _rate_hits.get(ip)
+        if dq is None:
+            dq = collections.deque()
+            _rate_hits[ip] = dq
+        while dq and dq[0] < now - _RATE_LIMIT_WINDOW:
+            dq.popleft()
+        if len(dq) >= _RATE_LIMIT_MAX:
+            return True
+        dq.append(now)
+    return False
+
+
 class _RemoveHandler(BaseHTTPRequestHandler):
     cfg: Dict[str, Any] = {}
 
@@ -487,6 +516,12 @@ class _RemoveHandler(BaseHTTPRequestHandler):
         return path
 
     def do_GET(self) -> None:
+        if len(self.path) > 8192:
+            self._send_html(414, "URI too long", "<p>Request URI is too long.</p>")
+            return
+        if _rate_limited(self.client_address[0]):
+            self._send_html(429, "Too many requests", "<p>Rate limit exceeded. Try again in a minute.</p>")
+            return
         try:
             self._do_get_routed()
         except Exception as exc:

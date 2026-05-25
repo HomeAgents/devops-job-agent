@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
+import os
 import sys
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Dict, Generator, Tuple
 
 from job_agent.browser.paths import resolve_browser_user_data_dir
@@ -167,16 +170,41 @@ def open_linkedin_login(cfg: Dict[str, Any], *, wait_minutes: int = 10) -> bool:
 
 
 @contextmanager
+def _browser_lock_path(service: str) -> Path:
+    lock_dir = Path(os.getenv("ORCHESTRATOR_DATA_DIR", str(Path.home() / "orchestrator-data")))
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    return lock_dir / f".browser-{service}.lock"
+
+
+@contextmanager
+def _browser_lock(service: str) -> Generator[None, None, None]:
+    """Cross-process file lock to serialize browser access for a given service."""
+    lock_path = _browser_lock_path(service)
+    lf = open(lock_path, "w")
+    try:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        lf.close()
+
+
+@contextmanager
 def with_linkedin_context(cfg: Dict[str, Any], *, headless: bool | None = None) -> Generator[Tuple, None, None]:
-    """Context manager yielding (playwright, browser_context). Closes both on exit."""
+    """Context manager yielding (playwright, browser_context). Closes both on exit.
+    Acquires a cross-process lock to prevent concurrent LinkedIn sessions."""
     block = cfg.get("browser") if isinstance(cfg.get("browser"), dict) else {}
     if headless is None:
         headless = bool(block.get("headless", True))
-    pw, context = _launch_persistent(cfg, headless=headless, service="linkedin")
-    try:
-        yield pw, context
-    finally:
-        _safe_close(context, pw)
+    with _browser_lock("linkedin"):
+        pw, context = _launch_persistent(cfg, headless=headless, service="linkedin")
+        try:
+            yield pw, context
+        finally:
+            _safe_close(context, pw)
 
 
 def _page_looks_google_ok(page) -> bool:
@@ -246,14 +274,17 @@ def open_google_login(cfg: Dict[str, Any], *, wait_minutes: int = 10) -> bool:
 
 
 @contextmanager
+@contextmanager
 def with_google_context(cfg: Dict[str, Any], *, headless: bool | None = None) -> Generator[Tuple, None, None]:
-    """Context manager yielding (playwright, browser_context) for Google Web."""
+    """Context manager yielding (playwright, browser_context) for Google Web.
+    Acquires a cross-process lock to prevent concurrent Google sessions."""
     block = cfg.get("browser") if isinstance(cfg.get("browser"), dict) else {}
     gblock = cfg.get("google_web_browser") if isinstance(cfg.get("google_web_browser"), dict) else {}
     if headless is None:
         headless = bool(gblock.get("headless", block.get("headless", True)))
-    pw, context = _launch_persistent(cfg, headless=headless, service="google")
-    try:
-        yield pw, context
-    finally:
-        _safe_close(context, pw)
+    with _browser_lock("google"):
+        pw, context = _launch_persistent(cfg, headless=headless, service="google")
+        try:
+            yield pw, context
+        finally:
+            _safe_close(context, pw)

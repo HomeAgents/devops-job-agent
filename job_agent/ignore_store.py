@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Set
+
+_store_lock = threading.Lock()
 
 from job_agent.job_dedupe import jobs_same_posting
 from job_agent.models import Job
@@ -56,7 +60,23 @@ def _save_raw_store(data: Dict[str, Any], cfg: Dict[str, Any] | None = None) -> 
     path = ignore_store_path(cfg)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"version": 2, "removed": data.get("removed") if isinstance(data.get("removed"), list) else []}
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    content = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    with _store_lock:
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        closed = False
+        try:
+            os.write(fd, content.encode("utf-8"))
+            os.close(fd)
+            closed = True
+            os.replace(tmp, str(path))
+        except BaseException:
+            if not closed:
+                os.close(fd)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     return path
 
 

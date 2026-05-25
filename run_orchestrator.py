@@ -7,6 +7,7 @@ import argparse
 import fcntl
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -113,12 +114,26 @@ def cmd_daily(args: argparse.Namespace) -> int:
     db = _db()
     users = db.users_due_today(weekday)
     print(f"Daily run {now.isoformat()} weekday={weekday} users={len(users)}")
+    max_parallel = int(os.getenv("ORCHESTRATOR_MAX_PARALLEL", "3"))
     errors = 0
-    for user in users:
+
+    def _run_one(user):
         print(f"  -> {user.email}")
-        rc = run_docker_job(user, db)
-        if rc != 0:
-            errors += 1
+        db.update_user(user.id, state="running")
+        return user.email, run_docker_job(user, db)
+
+    if len(users) <= 1 or max_parallel <= 1:
+        for user in users:
+            _, rc = _run_one(user)
+            if rc != 0:
+                errors += 1
+    else:
+        with ThreadPoolExecutor(max_workers=min(max_parallel, len(users))) as pool:
+            futures = {pool.submit(_run_one, u): u for u in users}
+            for fut in as_completed(futures):
+                email, rc = fut.result()
+                if rc != 0:
+                    errors += 1
     touch_activity()
     return 1 if errors else 0
 
