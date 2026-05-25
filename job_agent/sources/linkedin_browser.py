@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import random
 import re
 import sys
 import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
+
+
+def _jittered_sleep(base: float, jitter_fraction: float = 0.3) -> None:
+    """Sleep for base seconds +/- jitter_fraction random variation."""
+    delta = base * jitter_fraction
+    time.sleep(base + random.uniform(-delta, delta))
 
 from job_agent.browser.session import open_linkedin_login, playwright_available, with_linkedin_context
 from job_agent.models import Job
@@ -745,8 +752,7 @@ def enrich_removed_records(records: List[Dict[str, Any]], cfg: Dict[str, Any]) -
     browser_enriched = 0
     if need_browser and playwright_available():
         pause = float(_jobs_search_block(cfg).get("reach_out_pause_seconds") or 1.8)
-        pw, context = with_linkedin_context(cfg)
-        try:
+        with with_linkedin_context(cfg) as (pw, context):
             page = context.pages[0] if context.pages else context.new_page()
             for rec in need_browser:
                 link = str(rec.get("link") or "")
@@ -769,9 +775,6 @@ def enrich_removed_records(records: List[Dict[str, Any]], cfg: Dict[str, Any]) -
                     time.sleep(pause)
                 except Exception as exc:
                     print(f"Removed job enrich skip {link}: {exc}", file=sys.stderr)
-        finally:
-            context.close()
-            pw.stop()
     elif need_browser:
         print("Removed jobs: LinkedIn rows still missing details (Playwright not installed).", file=sys.stderr)
 
@@ -818,13 +821,9 @@ def enrich_reach_out_for_jobs(
     if not need:
         return
     search_url = build_linkedin_jobs_search_url(cfg)
-    pw, context = with_linkedin_context(cfg)
-    try:
+    with with_linkedin_context(cfg) as (pw, context):
         page = context.pages[0] if context.pages else context.new_page()
         _enrich_jobs_reach_out_people(page, need, search_url, cfg, for_email=for_email)
-    finally:
-        context.close()
-        pw.stop()
 
 
 def _job_view_url(job: Job) -> str:
@@ -944,15 +943,14 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
     out: List[Job] = []
     seen_ids: set[str] = set()
 
-    pw, context = with_linkedin_context(cfg)
-    try:
+    with with_linkedin_context(cfg) as (pw, context):
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(search_url, wait_until="domcontentloaded", timeout=90_000)
         try:
             page.wait_for_selector('a[href*="/jobs/view/"]', timeout=35_000)
         except Exception:
             pass
-        time.sleep(5.0)
+        _jittered_sleep(5.0)
 
         url_low = (page.url or "").lower()
         title_low = (page.title() or "").lower()
@@ -974,7 +972,7 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
         for page_idx in range(max_pages):
             rows = _extract_cards_from_page(page)
             if not rows and page_idx == 0:
-                time.sleep(4.0)
+                _jittered_sleep(4.0)
                 rows = _extract_cards_from_page(page)
             for row in rows:
                 href = row["href"]
@@ -1008,12 +1006,12 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             except Exception:
                 pass
-            time.sleep(scroll_pause)
+            _jittered_sleep(scroll_pause)
             try:
                 btn = page.query_selector('button[aria-label="View next page"], button.jobs-search-pagination__button--next')
                 if btn and btn.is_enabled():
                     btn.click()
-                    time.sleep(scroll_pause)
+                    _jittered_sleep(scroll_pause)
                 else:
                     break
             except Exception:
@@ -1022,8 +1020,5 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
         print(f"LinkedIn browser: collected {len(out)} jobs ({len(seen_ids)} unique ids)", file=sys.stderr)
         if out:
             _enrich_jobs_reach_out_people(page, out, search_url, cfg)
-    finally:
-        context.close()
-        pw.stop()
 
     return out

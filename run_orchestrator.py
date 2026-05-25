@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
 import sys
 from datetime import datetime
@@ -29,32 +30,77 @@ def _db() -> UserDB:
     return UserDB(path)
 
 
-def cmd_poll(args: argparse.Namespace) -> int:
-    db = _db()
-    engine = ConversationEngine(db)
-    mails = fetch_inbound(max_messages=args.max, known_message_ids=db.known_message_ids())
-    did_work = False
-    for mail in mails:
-        if is_ignored_inbound(mail):
-            why = ignore_reason(mail) or "filtered"
-            print(f"Skipped from={mail.from_email} subject={mail.subject!r} ({why})")
+def _acquire_poll_lock() -> "open | None":
+    """Prevent concurrent poll-inbox executions via exclusive file lock."""
+    lock_path = data_root() / ".poll-inbox.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lf = open(lock_path, "w")
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lf
+    except OSError:
+        return None
+
+
+def _recover_stuck_users(db: UserDB, max_running_minutes: int = 30) -> int:
+    """Reset users stuck in 'running' state for too long."""
+    from datetime import timedelta, timezone as tz
+
+    cutoff = (datetime.now(tz.utc) - timedelta(minutes=max_running_minutes)).isoformat()
+    recovered = 0
+    for user in db.get_all_users():
+        if user.state != "running":
             continue
-        print(f"Processing from={mail.from_email} subject={mail.subject!r}")
-        engine.handle(mail)
-        did_work = True
-    retried = engine.retry_unreplied(min_age_seconds=120, max_retries=3)
-    if retried:
-        print(f"Retried {retried} unreplied message(s).")
-        did_work = True
-    sent = engine.send_feedback_prompts(minutes_after=args.feedback_minutes)
-    if sent:
-        print(f"Sent {sent} feedback prompt(s).")
-        did_work = True
-    if did_work:
-        touch_activity()
-    if not args.no_autostop:
-        if maybe_stop_vm(args.idle_minutes):
-            print(f"VM deallocate requested (idle >= {args.idle_minutes} min).")
+        changed = user.last_outbound_at or user.last_inbound_at
+        if changed and changed < cutoff:
+            print(f"Recovering stuck user {user.email} (in 'running' since {changed})")
+            db.update_user(user.id, state="returning")
+            recovered += 1
+    return recovered
+
+
+def cmd_poll(args: argparse.Namespace) -> int:
+    lock = _acquire_poll_lock()
+    if lock is None:
+        print("Another poll-inbox is already running — skipping.")
+        return 0
+
+    try:
+        db = _db()
+        recovered = _recover_stuck_users(db)
+        if recovered:
+            print(f"Recovered {recovered} stuck user(s) from 'running' state.")
+
+        engine = ConversationEngine(db)
+        mails = fetch_inbound(max_messages=args.max, known_message_ids=db.known_message_ids())
+        did_work = False
+        for mail in mails:
+            if is_ignored_inbound(mail):
+                why = ignore_reason(mail) or "filtered"
+                print(f"Skipped from={mail.from_email} subject={mail.subject!r} ({why})")
+                continue
+            print(f"Processing from={mail.from_email} subject={mail.subject!r}")
+            engine.handle(mail)
+            did_work = True
+        retried = engine.retry_unreplied(min_age_seconds=120, max_retries=3)
+        if retried:
+            print(f"Retried {retried} unreplied message(s).")
+            did_work = True
+        sent = engine.send_feedback_prompts(minutes_after=args.feedback_minutes)
+        if sent:
+            print(f"Sent {sent} feedback prompt(s).")
+            did_work = True
+        if did_work:
+            touch_activity()
+        if not args.no_autostop:
+            if maybe_stop_vm(args.idle_minutes):
+                print(f"VM deallocate requested (idle >= {args.idle_minutes} min).")
+    finally:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+        except OSError:
+            pass
     return 0
 
 

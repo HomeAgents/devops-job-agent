@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import random
 import re
 import sys
 import time
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
+
+
+def _jittered_sleep(base: float, jitter_fraction: float = 0.3) -> None:
+    delta = base * jitter_fraction
+    time.sleep(base + random.uniform(-delta, delta))
 
 from job_agent.browser.session import playwright_available, with_linkedin_context
 from job_agent.linkedin_og import hiring_signal_in_text, matches_leadership_role_focus
@@ -128,8 +134,7 @@ def fetch_linkedin_posts(cfg: Dict[str, Any]) -> List[Job]:
     out: List[Job] = []
     seen_links: set[str] = set()
 
-    pw, context = with_linkedin_context(cfg)
-    try:
+    with with_linkedin_context(cfg) as (pw, context):
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(search_url, wait_until="domcontentloaded", timeout=90_000)
         try:
@@ -139,7 +144,7 @@ def fetch_linkedin_posts(cfg: Dict[str, Any]) -> List[Job]:
             )
         except Exception:
             pass
-        time.sleep(4.0)
+        _jittered_sleep(4.0)
 
         url_low = (page.url or "").lower()
         if "authwall" in url_low or "uas/login" in url_low:
@@ -152,9 +157,9 @@ def fetch_linkedin_posts(cfg: Dict[str, Any]) -> List[Job]:
                     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 except Exception:
                     pass
-                time.sleep(scroll_pause)
+                _jittered_sleep(scroll_pause)
 
-        time.sleep(2.0)
+        _jittered_sleep(2.0)
         raw_posts = page.evaluate(_EXTRACT_POSTS_JS)
         if not isinstance(raw_posts, list):
             raw_posts = []
@@ -222,8 +227,5 @@ def fetch_linkedin_posts(cfg: Dict[str, Any]) -> List[Job]:
                 ))
 
         print(f"LinkedIn posts: collected {len(out)} hiring post(s)", file=sys.stderr)
-    finally:
-        context.close()
-        pw.stop()
 
     return out

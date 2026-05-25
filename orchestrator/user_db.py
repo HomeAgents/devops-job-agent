@@ -50,6 +50,7 @@ class UserDB:
 
     def _init_schema(self) -> None:
         with self.connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS users (

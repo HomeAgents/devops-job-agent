@@ -6,7 +6,10 @@ SERPAPI_URL = "https://serpapi.com/search"
 
 
 def serpapi_request(params: dict, timeout: int = 45) -> dict:
-    response = requests.get(SERPAPI_URL, params=params, timeout=timeout)
+    try:
+        response = requests.get(SERPAPI_URL, params=params, timeout=timeout)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"SerpAPI network error: {exc}") from exc
     try:
         data = response.json()
     except ValueError as exc:

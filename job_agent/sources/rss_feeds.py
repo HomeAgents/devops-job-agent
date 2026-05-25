@@ -44,6 +44,10 @@ def fetch_rss_jobs(feed_urls: List[str], cfg: Dict[str, Any]) -> List[Job]:
         if not url or not url.startswith("http"):
             continue
         parsed = feedparser.parse(url)
+        if parsed.bozo and not parsed.entries:
+            import sys
+            print(f"RSS {url[:60]}: feed parse error: {parsed.bozo_exception}", file=sys.stderr)
+            continue
         for e in parsed.entries or []:
             link = getattr(e, "link", "") or ""
             if not link:

@@ -129,8 +129,7 @@ def discover_comeet_credentials_playwright(board_url: str, cfg: Dict[str, Any]) 
     token = ""
     discovered_uid = ""
 
-    pw, ctx = with_google_context(cfg)
-    try:
+    with with_google_context(cfg) as (pw, ctx):
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         creds: Dict[str, str] = {}
 
@@ -148,15 +147,6 @@ def discover_comeet_credentials_playwright(board_url: str, cfg: Dict[str, Any]) 
             discovered_uid = creds["uid"]
         if creds.get("token"):
             token = creds["token"]
-    finally:
-        try:
-            ctx.close()
-        except Exception:
-            pass
-        try:
-            pw.stop()
-        except Exception:
-            pass
 
     return discovered_uid or uid, token
 

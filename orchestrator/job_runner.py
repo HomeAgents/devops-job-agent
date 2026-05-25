@@ -185,7 +185,14 @@ def run_job_for_user(user: UserRecord, db: UserDB, *, dry_run: bool = False) -> 
     else:
         cmd.append("--email-all-fetched")
 
-    proc = subprocess.run(cmd, cwd=str(root), env=env, capture_output=True, text=True)
+    timeout = int(os.getenv("ORCHESTRATOR_JOB_TIMEOUT", "1800"))
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), env=env, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"Job for {user.email} timed out after {timeout}s", file=sys.stderr)
+        (work / "last-run.log").write_text(f"TIMEOUT after {timeout}s\n", encoding="utf-8")
+        db.update_user(user.id, state="returning")
+        return 1
     combined = proc.stdout + "\n" + proc.stderr
     (work / "last-run.log").write_text(combined, encoding="utf-8")
 
@@ -226,7 +233,14 @@ def run_docker_job(user: UserRecord, db: UserDB) -> int:
         "/work/jobs.db",
         "--email-all-fetched",
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    timeout = int(os.getenv("ORCHESTRATOR_JOB_TIMEOUT", "1800"))
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"Docker job for {user.email} timed out after {timeout}s", file=sys.stderr)
+        (work / "last-docker.log").write_text(f"TIMEOUT after {timeout}s\n", encoding="utf-8")
+        db.update_user(user.id, state="returning")
+        return 1
     combined = proc.stdout + proc.stderr
     (work / "last-docker.log").write_text(combined, encoding="utf-8")
     return _finish_job_run(user, db, proc, combined)

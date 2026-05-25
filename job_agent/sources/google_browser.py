@@ -164,8 +164,7 @@ def fetch_google_web_browser(cfg: Dict[str, Any]) -> List[Job]:
 
     print(f"Google browser: {len(queries)} query/queries (profile: google)", file=sys.stderr)
 
-    pw, context = with_google_context(cfg)
-    try:
+    with with_google_context(cfg) as (pw, context):
         page = context.pages[0] if context.pages else context.new_page()
         for i, q in enumerate(queries):
             url = _build_search_url(cfg, q)
@@ -226,9 +225,6 @@ def fetch_google_web_browser(cfg: Dict[str, Any]) -> List[Job]:
                 )
             if pause > 0 and i + 1 < len(queries):
                 time.sleep(pause)
-    finally:
-        context.close()
-        pw.stop()
 
     print(f"Google browser: collected {len(out)} job link(s)", file=sys.stderr)
     return out

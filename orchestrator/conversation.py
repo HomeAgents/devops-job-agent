@@ -32,12 +32,18 @@ def _data_root():
     return Path(os.getenv("ORCHESTRATOR_DATA_DIR", str(Path.home() / "orchestrator-data")))
 
 
+_MAX_CV_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
 def _save_cv(user: UserRecord, attachments: list[tuple[str, bytes]], body: str) -> Optional[str]:
     work = _data_root() / "users" / sanitize_email(user.email)
     work.mkdir(parents=True, exist_ok=True)
     for name, data in attachments:
         lower = name.lower()
         if lower.endswith((".pdf", ".doc", ".docx", ".txt")):
+            if len(data) > _MAX_CV_BYTES:
+                print(f"Skipping attachment {name}: {len(data)} bytes exceeds {_MAX_CV_BYTES} limit", flush=True)
+                continue
             dest = work / Path(name).name
             dest.write_bytes(data)
             return str(dest)

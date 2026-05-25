@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import time
 from typing import Any, Dict, List, Union
 
 import requests
@@ -7,6 +9,9 @@ import requests
 from job_agent.models import Job
 from job_agent.scoring import score_title, title_matches_role_focus
 from job_agent.util import normalize_url, strip_html
+
+_MAX_RETRIES = 2
+_RETRY_DELAY = 3
 
 
 def _greenhouse_location(job: Dict[str, Any]) -> str:
@@ -51,15 +56,28 @@ def fetch_greenhouse(boards: List[str], cfg: Dict[str, Any]) -> List[Job]:
         if not board:
             continue
         url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
-        try:
-            r = requests.get(url, timeout=25)
-        except requests.RequestException:
-            continue
-        if r.status_code != 200:
-            continue
-        try:
-            data = r.json()
-        except ValueError:
+        data = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                r = requests.get(url, timeout=25)
+            except requests.RequestException as exc:
+                print(f"Greenhouse {board}: request failed (attempt {attempt + 1}): {exc}", file=sys.stderr)
+                if attempt < _MAX_RETRIES:
+                    time.sleep(_RETRY_DELAY * (attempt + 1))
+                continue
+            if r.status_code != 200:
+                print(f"Greenhouse {board}: HTTP {r.status_code} (attempt {attempt + 1})", file=sys.stderr)
+                if r.status_code >= 500 and attempt < _MAX_RETRIES:
+                    time.sleep(_RETRY_DELAY * (attempt + 1))
+                    continue
+                break
+            try:
+                data = r.json()
+            except ValueError:
+                print(f"Greenhouse {board}: invalid JSON response", file=sys.stderr)
+                break
+            break
+        if data is None:
             continue
         company = (data.get("name") or board).replace(" Job Board", "").strip()
         for job in data.get("jobs") or []:

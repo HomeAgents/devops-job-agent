@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import time
@@ -15,6 +16,10 @@ def _state_path(cfg: Dict[str, Any]) -> Path:
     if raw:
         return Path(os.path.expanduser(raw))
     return Path.home() / ".job-agent" / ".last-digest-send.json"
+
+
+def _lock_path(cfg: Dict[str, Any]) -> Path:
+    return _state_path(cfg).with_suffix(".lock")
 
 
 def _load(path: Path) -> Dict[str, Any]:
@@ -38,29 +43,62 @@ def minutes_since_last_send(cfg: Dict[str, Any]) -> float | None:
 
 
 def should_skip_send(cfg: Dict[str, Any], *, slot: str = "") -> Tuple[bool, str]:
-    """True if a digest was sent recently (same cooldown for all slots)."""
+    """True if a digest was sent recently (same cooldown for all slots).
+
+    Uses an exclusive file lock to prevent two concurrent processes from both
+    passing the check and sending duplicate digests.
+    """
     if (slot or "").strip() == "removed":
         return False, ""
     raw_gap = cfg.get("digest_min_minutes_between_sends")
     min_gap = 90.0 if raw_gap is None else float(raw_gap)
     if min_gap <= 0:
         return False, ""
-    ago = minutes_since_last_send(cfg)
-    if ago is None or ago >= min_gap:
-        return False, ""
-    return True, (
-        f"Skipping digest send ({slot or 'digest'}): last email was {ago:.0f} min ago "
-        f"(cooldown {min_gap:.0f} min). One combined digest per window."
-    )
+    lock = _lock_path(cfg)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lf = open(lock, "w")
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+    except OSError:
+        lf = None
+    try:
+        ago = minutes_since_last_send(cfg)
+        if ago is None or ago >= min_gap:
+            return False, ""
+        return True, (
+            f"Skipping digest send ({slot or 'digest'}): last email was {ago:.0f} min ago "
+            f"(cooldown {min_gap:.0f} min). One combined digest per window."
+        )
+    finally:
+        if lf:
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                lf.close()
+            except OSError:
+                pass
 
 
 def record_send(cfg: Dict[str, Any], *, slot: str, job_count: int) -> None:
     path = _state_path(cfg)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "sent_at_unix": time.time(),
-        "sent_at_iso": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "slot": slot,
-        "job_count": job_count,
-    }
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    lock = _lock_path(cfg)
+    try:
+        lf = open(lock, "w")
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+    except OSError:
+        lf = None
+    try:
+        payload = {
+            "sent_at_unix": time.time(),
+            "sent_at_iso": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "slot": slot,
+            "job_count": job_count,
+        }
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    finally:
+        if lf:
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                lf.close()
+            except OSError:
+                pass

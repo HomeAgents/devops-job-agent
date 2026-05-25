@@ -71,6 +71,12 @@ def remove_secret(cfg: Dict[str, Any]) -> str:
     env = get_setting("JOB_AGENT_REMOVE_SECRET", "DIGEST_REMOVE_SECRET").strip()
     if env:
         return env
+    print(
+        "WARNING: No HMAC secret configured for digest action links. "
+        "Set JOB_AGENT_REMOVE_SECRET env var or digest_remove.secret in config. "
+        "Using auto-derived fallback (predictable from filesystem path).",
+        file=sys.stderr,
+    )
     path = ignore_store_path(cfg)
     seed = f"job-agent-remove:{path}"
     return hashlib.sha256(seed.encode()).hexdigest()
@@ -449,6 +455,8 @@ def _apply_restore(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
     conn = _db_connect(cfg)
     try:
         job_db.upsert_jobs(conn, [job], mark_emailed=False)
+        conn.execute("UPDATE jobs SET emailed_at = NULL WHERE link = ?", (normalize_url(job.link),))
+        conn.commit()
     finally:
         conn.close()
     title = snapshot.get("title") or job.title or link

@@ -118,10 +118,16 @@ def upsert_jobs(conn: sqlite3.Connection, jobs: List[Job], *, mark_emailed: bool
         cur = conn.execute("SELECT link FROM jobs WHERE link = ?", (job.link,))
         exists = cur.fetchone() is not None
         if exists:
-            conn.execute(
-                "UPDATE jobs SET payload = ?, last_seen_at = ?, emailed_at = ? WHERE link = ?",
-                (payload, now, emailed_at, job.link),
-            )
+            if mark_emailed:
+                conn.execute(
+                    "UPDATE jobs SET payload = ?, last_seen_at = ?, emailed_at = ? WHERE link = ?",
+                    (payload, now, emailed_at, job.link),
+                )
+            else:
+                conn.execute(
+                    "UPDATE jobs SET payload = ?, last_seen_at = ? WHERE link = ?",
+                    (payload, now, job.link),
+                )
         else:
             conn.execute(
                 "INSERT INTO jobs (link, first_seen_at, last_seen_at, emailed_at, payload) VALUES (?, ?, ?, ?, ?)",
