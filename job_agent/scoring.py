@@ -20,3 +20,23 @@ def score_title(title: str, cfg: Dict[str, Any]) -> int:
     if "devops" in t and ("manager" in t or "director" in t or "head" in t):
         score += 4
     return score
+
+
+def title_matches_role_focus(title: str, cfg: Dict[str, Any]) -> bool:
+    """Return True if the title has at least one scoring keyword hit.
+
+    Used by ATS sources (Greenhouse, Lever) to drop completely irrelevant
+    titles before they enter the pipeline.  Titles that match zero keywords
+    from the scoring config are noise (e.g. "Customer Success Manager" when
+    the user searches for DevOps roles).
+    """
+    sc = cfg.get("scoring") or {}
+    keywords: List[str] = sc.get("keywords") or ["DevOps", "Platform", "SRE"]
+    role_focus: List[str] = cfg.get("role_focus") or []
+
+    t = (title or "").lower()
+    if any(k.lower() in t for k in keywords):
+        return True
+    if any(r.lower() in t for r in role_focus):
+        return True
+    return False

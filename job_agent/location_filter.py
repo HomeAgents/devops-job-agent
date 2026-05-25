@@ -25,6 +25,25 @@ def _has_alias(text: str, aliases: List[str]) -> bool:
     return any(a in low for a in aliases)
 
 
+_NON_ISRAEL_COUNTRIES = (
+    "usa", "united states", "u.s.", "canada", "united kingdom", "uk ",
+    "germany", "france", "spain", "italy", "netherlands", "sweden",
+    "australia", "india", "japan", "singapore", "brazil", "mexico",
+    "poland", "romania", "czech", "portugal", "ireland", "belgium",
+    "austria", "switzerland", "norway", "denmark", "finland",
+    "south korea", "china", "philippines", "argentina", "colombia",
+    "turkey", "hungary", "bulgaria", "croatia", "serbia", "ukraine",
+)
+
+
+def _location_is_explicitly_non_israel(loc: str) -> bool:
+    """True when the location field names a non-Israel country."""
+    low = (loc or "").lower()
+    if not low:
+        return False
+    return any(c in low for c in _NON_ISRAEL_COUNTRIES)
+
+
 def _israel_or_il_signals_match(j: Job, cfg: Dict[str, Any], aliases: List[str]) -> bool:
     """Pass rows with Israel text, IL host signals, or trusted browser LinkedIn search."""
     loc = j.location or ""
@@ -67,6 +86,11 @@ def _israel_or_il_signals_match(j: Job, cfg: Dict[str, Any], aliases: List[str])
 
     if sl.startswith("rss:") and (loc.strip().lower() == "israel" or _has_alias(loc, aliases)):
         return True
+
+    # For ATS sources (greenhouse/lever): reject if location explicitly names
+    # a non-Israel country, even if the job description mentions Israel.
+    if _location_is_explicitly_non_israel(loc):
+        return False
 
     include_desc = bool(cfg.get("location_hint_include_job_description", False)) and not strict_loc_title
     if include_desc and isinstance(j.raw, dict):

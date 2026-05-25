@@ -151,6 +151,18 @@ _SIGNATURE_MARKERS = re.compile(
 )
 
 
+_NUMBERED_MARKER = re.compile(r"^\d+[\.\)]\s*$")
+_NON_KEYWORD_LINE = re.compile(
+    r"^(?:cv|resume|attached|see attached|please find|hereby|enclosed)\b",
+    re.I,
+)
+_JOB_TERM = re.compile(
+    r"\b(devops|manager|director|engineer|platform|sre|operations|"
+    r"program|project|pmo|head|vp|lead|architect|מנהל|ראש|תפעול)\b",
+    re.I,
+)
+
+
 def strip_email_signature(text: str) -> str:
     """Remove trailing thanks / name / email lines from pasted or forwarded body."""
     t = strip_quoted_reply(text)
@@ -160,20 +172,22 @@ def strip_email_signature(text: str) -> str:
         s = line.strip()
         if not s:
             continue
+        if _NUMBERED_MARKER.match(s):
+            continue
+        if _NON_KEYWORD_LINE.match(s):
+            continue
         # Standalone email line (not a job keyword)
         if re.fullmatch(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", s, re.I):
             break
         # Name + email on one line
-        if re.search(r"@[\w.-]+\.[a-z]{2,}", s, re.I) and not re.search(
-            r"\b(devops|manager|director|engineer|platform|sre|מנהל)\b", s, re.I
-        ):
+        if re.search(r"@[\w.-]+\.[a-z]{2,}", s, re.I) and not _JOB_TERM.search(s):
             break
         # Likely full name only (2–4 words, no job terms)
         if (
             kept
             and 2 <= len(s.split()) <= 4
             and "@" not in s
-            and not re.search(r"\b(devops|manager|director|engineer|platform|sre|מנהל)\b", s, re.I)
+            and not _JOB_TERM.search(s)
         ):
             break
         kept.append(s)
@@ -191,6 +205,7 @@ def clean_keywords_input(text: str) -> str:
     t = strip_email_signature(text)
     t = re.sub(r"^(?:keywords?|roles?|positions?)\s*[:\-]\s*", "", t, flags=re.I).strip()
     t, _ = extract_location_hint(t)
+    t = re.sub(r"[()]", "", t)
     return normalize_phrase(t)
 
 
@@ -203,6 +218,7 @@ def extract_location_hint(text: str) -> tuple[str, str]:
         text = text[: m.start()] + text[m.end() :]
     if re.search(r"\bisrael\b|ישראל", text, re.I):
         loc = "Israel"
+        text = re.sub(r"\s*[-–—]\s*(?:israel|ישראל)\s*", " ", text, flags=re.I).strip()
     return text.strip(), loc
 
 
@@ -584,27 +600,74 @@ def _linkedin_label(anchor: str) -> str:
     return labels.get(anchor, anchor)
 
 
+_HEBREW_RE = re.compile(r"[\u0590-\u05ff]")
+
+
+def _quote_linkedin_term(term: str) -> str:
+    """Format one token for LinkedIn Jobs boolean keywords (OR-joined)."""
+    t = re.sub(r"\s+", " ", (term or "").strip())
+    if not t:
+        return ""
+    if " " in t or _HEBREW_RE.search(t):
+        escaped = t.replace('"', "")
+        return f'"{escaped}"'
+    return t
+
+
+def normalize_linkedin_keywords(raw: str, *, location: str = "Israel") -> str:
+    """Strip a trailing location suffix from legacy approved queries."""
+    s = (raw or "").strip()
+    loc = (location or "").strip()
+    if loc and s.lower().endswith(loc.lower()):
+        s = s[: -len(loc)].strip()
+    return s.strip()
+
+
 def build_linkedin_query(selected: list[KeywordOption], location: str) -> str:
-    """Compact EN query for LinkedIn Jobs (deduped anchors; Hebrew omitted from URL)."""
-    anchors: list[str] = []
-    seen: set[str] = set()
+    """One LinkedIn Jobs keywords string: English role anchors OR Hebrew phrases."""
+    _ = location  # location is stored in linkedin.jobs_search.location, not keywords
+    en_anchors: list[str] = []
+    he_phrases: list[str] = []
+    seen_en: set[str] = set()
+    seen_he: set[str] = set()
+
     for o in selected:
         en = (o.en or "").strip()
-        if not en or re.search(r"[\u0590-\u05ff]", en):
+        if not en or _HEBREW_RE.search(en):
             continue
         anchor = _anchor_for_phrase(en) or _normalize_key(en)
-        if anchor in seen:
+        if anchor in seen_en:
             continue
-        seen.add(anchor)
-        # Use short anchor label when known (e.g. devops manager not Manager, DevOps).
+        seen_en.add(anchor)
         label = _linkedin_label(anchor) if anchor in {a for a, _, _ in _ROLE_EXPANSIONS} else en
-        anchors.append(label)
-        if len(anchors) >= 6:
+        en_anchors.append(label)
+        if len(en_anchors) >= 6:
             break
-    if not anchors:
-        anchors = ["devops manager"]
-    parts = [f'"{p}"' if " " in p else p for p in anchors]
-    core = " OR ".join(parts)
-    if location and location.lower() not in core.lower():
-        return f"({core}) {location}"
-    return core
+
+    for o in selected:
+        he = (o.he or "").strip()
+        if not he:
+            continue
+        key = he.lower()
+        if key in seen_he:
+            continue
+        seen_he.add(key)
+        he_phrases.append(he)
+        if len(he_phrases) >= 6:
+            break
+
+    if not en_anchors:
+        for o in selected:
+            en = (o.en or "").strip()
+            if en and _HEBREW_RE.search(en):
+                key = en.lower()
+                if key not in seen_he:
+                    seen_he.add(key)
+                    he_phrases.append(en)
+
+    if not en_anchors and not he_phrases:
+        en_anchors = ["devops manager"]
+
+    parts = [_quote_linkedin_term(p) for p in en_anchors + he_phrases]
+    parts = [p for p in parts if p]
+    return " OR ".join(parts)

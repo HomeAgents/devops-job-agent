@@ -85,10 +85,33 @@ class UserDB:
                   message_id TEXT NOT NULL UNIQUE,
                   from_email TEXT NOT NULL,
                   subject TEXT,
-                  received_at TEXT NOT NULL
+                  received_at TEXT NOT NULL,
+                  reply_status TEXT NOT NULL DEFAULT 'pending',
+                  retry_count INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS conversation_log (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  direction TEXT NOT NULL,
+                  user_email TEXT NOT NULL,
+                  subject TEXT,
+                  body_snippet TEXT,
+                  action TEXT,
+                  state_before TEXT,
+                  state_after TEXT,
+                  message_id TEXT,
+                  created_at TEXT NOT NULL
                 );
                 """
             )
+            # Migration: add reply_status/retry_count to existing inbound_log tables
+            try:
+                conn.execute("ALTER TABLE inbound_log ADD COLUMN reply_status TEXT NOT NULL DEFAULT 'replied'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE inbound_log ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
 
     def _row_to_user(self, row: sqlite3.Row) -> UserRecord:
         days_raw = row["schedule_days"] or "[]"
@@ -241,14 +264,50 @@ class UserDB:
             with self.connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO inbound_log (message_id, from_email, subject, received_at)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO inbound_log (message_id, from_email, subject, received_at, reply_status, retry_count)
+                    VALUES (?, ?, ?, ?, 'pending', 0)
                     """,
                     (message_id, from_email, subject, _utc_now()),
                 )
             return True
         except sqlite3.IntegrityError:
             return False
+
+    def mark_replied(self, message_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE inbound_log SET reply_status = 'replied' WHERE message_id = ?",
+                (message_id,),
+            )
+
+    def get_unreplied(self, min_age_seconds: int = 120, max_retries: int = 3) -> list[dict[str, Any]]:
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=min_age_seconds)).isoformat()
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT message_id, from_email, subject, received_at, retry_count
+                FROM inbound_log
+                WHERE reply_status = 'pending' AND retry_count < ? AND received_at <= ?
+                ORDER BY received_at ASC
+                """,
+                (max_retries, cutoff),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def increment_retry(self, message_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE inbound_log SET retry_count = retry_count + 1 WHERE message_id = ?",
+                (message_id,),
+            )
+
+    def mark_dead_letter(self, message_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE inbound_log SET reply_status = 'dead_letter' WHERE message_id = ?",
+                (message_id,),
+            )
 
     def add_search(self, user_id: int, keywords: str, cv_path: Optional[str], label: str = "default") -> None:
         now = _utc_now()
@@ -268,6 +327,58 @@ class UserDB:
                 (user_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def log_conversation(
+        self,
+        *,
+        direction: str,
+        user_email: str,
+        subject: Optional[str] = None,
+        body_snippet: Optional[str] = None,
+        action: Optional[str] = None,
+        state_before: Optional[str] = None,
+        state_after: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> None:
+        snippet = (body_snippet or "")[:200]
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversation_log
+                  (direction, user_email, subject, body_snippet, action, state_before, state_after, message_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (direction, user_email, subject, snippet, action, state_before, state_after, message_id, _utc_now()),
+            )
+
+    def get_conversation_log(
+        self,
+        *,
+        days: Optional[int] = None,
+        user_email: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if user_email:
+            clauses.append("user_email = ?")
+            params.append(user_email.strip().lower())
+        if days and days > 0:
+            from datetime import timedelta
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            clauses.append("created_at >= ?")
+            params.append(cutoff)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM conversation_log {where} ORDER BY created_at ASC",
+                params,
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_all_users(self) -> list[UserRecord]:
+        with self.connect() as conn:
+            rows = conn.execute("SELECT * FROM users ORDER BY email").fetchall()
+        return [self._row_to_user(r) for r in rows]
 
 
 def parse_schedule_days(text: str) -> list[int]:

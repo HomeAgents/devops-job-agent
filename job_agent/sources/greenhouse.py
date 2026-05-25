@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Union
 import requests
 
 from job_agent.models import Job
-from job_agent.scoring import score_title
+from job_agent.scoring import score_title, title_matches_role_focus
 from job_agent.util import normalize_url, strip_html
 
 
@@ -66,31 +66,7 @@ def fetch_greenhouse(boards: List[str], cfg: Dict[str, Any]) -> List[Job]:
             title = job.get("title", "") or ""
             if not title:
                 continue
-            tlow = title.lower()
-            # Avoid matching "Product Manager, AI Platform" on bare substring "platform".
-            role_signals = (
-                "devops",
-                "site reliability",
-                " sre",
-                "sre ",
-                "sre,",
-                "sre/",
-                "infrastructure",
-                "infra ",
-                "platform engineering",
-                "platform engineer",
-                "head of platform",
-                "director of platform",
-                "vp of platform",
-                "engineering manager",
-                "engineering lead",
-                "cloud infrastructure",
-                "kubernetes",
-                "terraform",
-            )
-            if not any(x in tlow for x in role_signals):
-                continue
-            if not any(x in tlow for x in ("manager", "director", "head", "lead", "vp", "vice")):
+            if not title_matches_role_focus(title, cfg):
                 continue
             link = job.get("absolute_url") or ""
             if not link:

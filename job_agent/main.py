@@ -54,6 +54,7 @@ from job_agent.sources.google_jobs import fetch_google_jobs
 from job_agent.sources.google_site_ats import fetch_google_site_ats
 from job_agent.browser.paths import resolve_browser_user_data_dir
 from job_agent.sources.google_browser import fetch_google_web_browser, google_login
+from job_agent.sources.linkedin_posts_browser import fetch_linkedin_posts
 from job_agent.sources.linkedin_browser import (
     build_linkedin_jobs_search_url,
     enrich_removed_records,
@@ -448,6 +449,13 @@ def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[
                 print(f"LinkedIn (browser): failed ({exc})", file=sys.stderr)
                 batch = []
             add_many(batch, "LinkedIn (browser)")
+        if li_on and (only is None or "linkedin" in only or "linkedin_posts" in only):
+            try:
+                batch = fetch_linkedin_posts(cfg)
+            except Exception as exc:
+                print(f"LinkedIn posts (browser): failed ({exc})", file=sys.stderr)
+                batch = []
+            add_many(batch, "LinkedIn posts (browser)")
         gw = cfg.get("google_web_browser")
         gw_on = isinstance(gw, dict) and gw.get("enabled", True)
         if gw_on and (only is None or "google" in only or "google_browser" in only or "google_web" in only):
@@ -575,6 +583,14 @@ def print_all_queries(cfg: Dict[str, Any]) -> None:
         print(f"  location: {js.get('location', '')}")
         print(f"  max_pages: {js.get('max_pages', 3)}")
         print(f"  profile: {resolve_browser_user_data_dir(cfg, service='linkedin')}")
+        ps = li.get("posts_search") if isinstance(li.get("posts_search"), dict) else {}
+        if ps.get("enabled", True):
+            from job_agent.sources.linkedin_posts_browser import _build_posts_search_url
+            print("\n=== LinkedIn Posts (logged-in browser) ===")
+            print(f"  URL: {_build_posts_search_url(cfg)}")
+            print(f"  max_scrolls: {ps.get('max_scrolls', 3)}")
+            print(f"  require_hiring_signal: {ps.get('require_hiring_signal', True)}")
+            print(f"  filter_by_role_focus: {ps.get('filter_by_role_focus', True)}")
         gw = cfg.get("google_web_browser") if isinstance(cfg.get("google_web_browser"), dict) else {}
         if gw.get("enabled", True):
             print("\n=== Google Web (logged-in browser) ===")
@@ -584,6 +600,8 @@ def print_all_queries(cfg: Dict[str, Any]) -> None:
             print(f"  queries ({len(gq)}):")
             for i, q in enumerate(gq, 1):
                 print(f"    {i:2d}. {q}")
+        else:
+            print("\n=== Google Web (disabled) ===")
         print("\n=== Tier 1 (no login) ===")
         print(f"  RSS feeds: {len(cfg.get('rss_feeds') or [])}")
         print(f"  Greenhouse boards: {len(cfg.get('greenhouse_boards') or [])}")

@@ -376,3 +376,64 @@ def build_ats_google_site_queries(cfg: Dict[str, Any]) -> List[str]:
     if max_q > 0:
         out = out[:max_q]
     return out
+
+
+def role_or_block(keywords: str) -> str:
+    """Wrap a LinkedIn-style OR keywords string in parentheses for Google site: queries."""
+    k = (keywords or "").strip()
+    if not k:
+        return '("devops manager")'
+    return k if k.startswith("(") else f"({k})"
+
+
+def or_terms_from_role_keywords(keywords: str) -> List[str]:
+    """Split an OR-joined role filter into terms (for scoring / title matching)."""
+    k = normalize_linkedin_keywords_for_terms(keywords)
+    if not k:
+        return []
+    inner = k[1:-1].strip() if k.startswith("(") and k.endswith(")") else k
+    parts = re.split(r"\s+OR\s+", inner, flags=re.I)
+    out: List[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        term = part.strip().strip('"').strip("'")
+        if not term:
+            continue
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(term)
+    return out
+
+
+def normalize_linkedin_keywords_for_terms(keywords: str) -> str:
+    """Drop trailing location token before parsing OR terms."""
+    s = (keywords or "").strip()
+    for loc in ("Israel", "ישראל"):
+        if s.lower().endswith(loc.lower()):
+            s = s[: -len(loc)].strip()
+    return s
+
+
+def build_unified_site_query_templates(role_block: str, location: str, after_clause: str) -> List[str]:
+    """
+    Google web queries for one location + one role OR-block.
+    Same role filter across LinkedIn jobs, ATS boards, and hiring posts.
+    """
+    loc = (location or "Israel").strip() or "Israel"
+    after = after_clause or ""
+    return [
+        f"site:il.linkedin.com/jobs {role_block} {loc}{after}",
+        f"site:linkedin.com/jobs/view {role_block} {loc}{after}",
+        f"site:job-boards.greenhouse.io {loc} {role_block}{after}",
+        f'site:apply.workable.com "{loc}" {role_block}{after}',
+        (
+            f'site:linkedin.com/posts ("hiring" OR "we\'re hiring" OR "now hiring" OR "open role") '
+            f"{role_block} {loc}{after}"
+        ),
+        (
+            'site:linkedin.com/posts ("מגייס" OR "מגייסים" OR "משרה פנויה") '
+            f"{role_block} {loc}{after}"
+        ),
+    ]

@@ -30,11 +30,10 @@ def _db() -> UserDB:
 
 
 def cmd_poll(args: argparse.Namespace) -> int:
-    ensure_vm_started()
-    touch_activity()
     db = _db()
     engine = ConversationEngine(db)
     mails = fetch_inbound(max_messages=args.max, known_message_ids=db.known_message_ids())
+    did_work = False
     for mail in mails:
         if is_ignored_inbound(mail):
             why = ignore_reason(mail) or "filtered"
@@ -42,9 +41,17 @@ def cmd_poll(args: argparse.Namespace) -> int:
             continue
         print(f"Processing from={mail.from_email} subject={mail.subject!r}")
         engine.handle(mail)
+        did_work = True
+    retried = engine.retry_unreplied(min_age_seconds=120, max_retries=3)
+    if retried:
+        print(f"Retried {retried} unreplied message(s).")
+        did_work = True
     sent = engine.send_feedback_prompts(minutes_after=args.feedback_minutes)
     if sent:
         print(f"Sent {sent} feedback prompt(s).")
+        did_work = True
+    if did_work:
+        touch_activity()
     if not args.no_autostop:
         if maybe_stop_vm(args.idle_minutes):
             print(f"VM deallocate requested (idle >= {args.idle_minutes} min).")
@@ -80,6 +87,17 @@ def cmd_run_user(args: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_admin_report(args: argparse.Namespace) -> int:
+    from orchestrator.admin_report import build_report
+
+    db = _db()
+    days = args.days if args.days and args.days > 0 else None
+    user_email = args.user if args.user else None
+    report = build_report(db, days=days, user_email=user_email)
+    print(report)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Job agent email orchestrator")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -98,6 +116,11 @@ def main(argv: list[str] | None = None) -> int:
     p_user.add_argument("--email", required=True)
     p_user.add_argument("--dry-run", action="store_true")
     p_user.set_defaults(func=cmd_run_user)
+
+    p_report = sub.add_parser("admin-report", help="Print admin conversation report")
+    p_report.add_argument("--days", type=int, default=0, help="Limit to last N days (0=all)")
+    p_report.add_argument("--user", type=str, default="", help="Filter by user email")
+    p_report.set_defaults(func=cmd_admin_report)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -17,7 +17,18 @@
       "f_TPR": "",
       "max_pages": 4,
       "scroll_pause_seconds": 1.5
+    },
+    "posts_search": {
+      "enabled": true,
+      "keywords": "",
+      "max_scrolls": 3,
+      "scroll_pause_seconds": 2.0,
+      "require_hiring_signal": true,
+      "filter_by_role_focus": true
     }
+  },
+  "google_web_browser": {
+    "enabled": false
   },
   "serpapi_features": {
     "google_jobs": false,
@@ -26,8 +37,23 @@
   },
   "use_serpapi": false,
   "rss_feeds": [],
-  "greenhouse_boards": ["nice", "taboola"],
-  "lever_sites": [],
+  "greenhouse_boards": [
+    "nice",
+    "taboola",
+    "figma",
+    "honeybook",
+    "nebius",
+    "wizinc",
+    "fireblocks",
+    "catonetworks",
+    "appsflyer",
+    "jfrog",
+    "riskified"
+  ],
+  "lever_sites": [
+    "CYE",
+    "controlup"
+  ],
   "location_hint": "Israel",
   "filter_jobs_by_location_hint": true,
   "location_filter_mode": "israel_or_il_signals",
@@ -45,6 +71,7 @@
   "location_hint_strict_location_or_title": false,
   "location_filter_source_prefixes": [
     "linkedin_browser",
+    "linkedin_posts_browser",
     "greenhouse:",
     "lever:",
     "rss:"

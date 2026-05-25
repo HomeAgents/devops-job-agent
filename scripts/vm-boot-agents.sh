@@ -20,4 +20,12 @@ if systemctl --user is-enabled birthday-copilot.service >/dev/null 2>&1; then
   systemctl --user start birthday-copilot.service 2>/dev/null || true
 fi
 
+# Poll inbox soon after boot so wake-from-deallocate does not wait up to 5 min for cron.
+if [[ -x "${JOB_ROOT}/scripts/poll-inbox.sh" ]]; then
+  (
+    sleep 60
+    bash "${JOB_ROOT}/scripts/poll-inbox.sh"
+  ) >>"${HOME}/logs/orchestrator-poll.log" 2>&1 &
+fi
+
 echo "[$(date -Iseconds)] vm-boot-agents done" >>"${HOME}/logs/vm-boot.log"

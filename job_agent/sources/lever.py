@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 import requests
 
 from job_agent.models import Job
-from job_agent.scoring import score_title
+from job_agent.scoring import score_title, title_matches_role_focus
 from job_agent.util import normalize_url
 
 
@@ -44,10 +44,7 @@ def fetch_lever(sites: List[str], cfg: Dict[str, Any]) -> List[Job]:
         for p in postings:
             text = p.get("text", "") or ""
             title = _title_from_lever_text(text)
-            tlow = title.lower()
-            if not any(x in tlow for x in ("devops", "platform", "sre", "infrastructure", "infra", "engineering", "cloud")):
-                continue
-            if not any(x in tlow for x in ("manager", "director", "head", "lead", "vp")):
+            if not title_matches_role_focus(title, cfg):
                 continue
             link = p.get("hostedUrl") or p.get("applyUrl") or ""
             if not link:

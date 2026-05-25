@@ -7,7 +7,14 @@ import sys
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
+from job_agent.query_build import (
+    build_unified_site_query_templates,
+    or_terms_from_role_keywords,
+    role_or_block,
+)
+from orchestrator.keyword_review import normalize_linkedin_keywords
 from orchestrator.user_db import UserDB, UserRecord, sanitize_email
 
 
@@ -29,14 +36,66 @@ def user_work_dir(user: UserRecord) -> Path:
     return d
 
 
+def _google_after_clause(ats: dict[str, Any]) -> str:
+    from datetime import date, timedelta
+
+    if ats.get("omit_after_clause"):
+        return ""
+    after_days = int(ats.get("after_days_ago") or 40)
+    return f" after:{(date.today() - timedelta(days=after_days)).isoformat()}"
+
+
+def _sync_google_search_from_linkedin(cfg: dict[str, Any], keywords: str, location: str) -> None:
+    """One role OR-block + location for all Google web / ATS site: queries."""
+    ats = cfg.get("ats_google_site_search")
+    if not isinstance(ats, dict) or not ats.get("enabled") or not keywords:
+        return
+    ats = cfg.setdefault("ats_google_site_search", {})
+    role_block = role_or_block(keywords)
+    after = _google_after_clause(ats)
+    loc = location or "Israel"
+    ats["role_phrases"] = [role_block]
+    ats["extra_query_templates"] = [
+        t.replace("{after}", after) for t in build_unified_site_query_templates(role_block, loc, "{after}")
+    ]
+    # User-approved filter only — do not merge global DevOps OR blocks on top.
+    ats["prepend_builtin_devops_or_blocks"] = False
+    ats["merge_roles_from_serpapi_template"] = False
+    ats["combine_role_phrases_or"] = True
+
+    terms = or_terms_from_role_keywords(keywords)
+    if terms:
+        sc = cfg.setdefault("scoring", {})
+        if isinstance(sc, dict):
+            existing = [str(k) for k in (sc.get("keywords") or [])]
+            seen = {k.lower() for k in existing}
+            for t in terms:
+                if t.lower() not in seen:
+                    existing.append(t)
+                    seen.add(t.lower())
+            sc["keywords"] = existing
+
+
 def build_user_config(user: UserRecord, base_config_path: Path) -> Path:
     work = user_work_dir(user)
     cfg = json.loads(base_config_path.read_text(encoding="utf-8"))
     cfg = deepcopy(cfg)
 
-    keywords = (user.meta.get("approved_keyword_query") or user.keywords or "").strip()
+    keywords_raw = (user.meta.get("approved_keyword_query") or user.keywords or "").strip()
+    location = (
+        str(user.meta.get("location_hint") or "").strip()
+        or str(cfg.get("location_hint") or "").strip()
+        or "Israel"
+    )
+    keywords = normalize_linkedin_keywords(keywords_raw, location=location)
     js = cfg.setdefault("linkedin", {}).setdefault("jobs_search", {})
     js["keywords"] = keywords
+    js["location"] = location
+    if not js.get("f_TPR"):
+        js["f_TPR"] = "r2592000"  # past month; user can override in base config
+    cfg["location_hint"] = location
+
+    _sync_google_search_from_linkedin(cfg, keywords, location)
 
     cfg["digest_min_minutes_between_sends"] = 0
 

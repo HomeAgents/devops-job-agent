@@ -37,7 +37,8 @@ def test_build_linkedin_query() -> None:
     review = build_keyword_review("DevOps Manager")
     q = build_linkedin_query(review.options[:2], "Israel")
     assert "devops" in q.lower()
-    assert "Israel" in q
+    assert "Israel" not in q
+    assert " OR " in q
 
 
 def test_strip_signature_from_keywords() -> None:

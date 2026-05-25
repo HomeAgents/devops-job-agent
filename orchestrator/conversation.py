@@ -113,15 +113,133 @@ def _wants_run_search(text: str) -> bool:
     return any(
         w in t
         for w in (
-            "report",
+            "run report",
+            "send report",
+            "generate report",
+            "job report",
             "digest",
             "run search",
             "search again",
             "new search",
             "current filter",
-            "generate report",
+            "run jobs",
         )
     )
+
+
+def _classify_admin_intent(body: str) -> Optional[str]:
+    """Use LLM to classify whether an admin email is an admin command.
+
+    Returns the command kind ("report", "history", "status") or None.
+    Falls back to regex if the API is unavailable.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    text = body.strip()[:300]
+    if not api_key or not text:
+        return _classify_admin_intent_regex(text)
+    try:
+        import json
+        import urllib.request
+
+        prompt = (
+            "You classify short email messages from an admin user of a job-search agent.\n"
+            "Decide if the message is asking for an ADMIN command or something else.\n\n"
+            "ADMIN commands:\n"
+            '- "report": user wants a system activity/conversation report or summary\n'
+            '- "history": user wants to see history of interactions/events\n'
+            '- "status": user wants system status, health check, or user statuses\n\n'
+            "NOT admin commands (return null):\n"
+            "- Requesting a job search, digest, or job report\n"
+            "- Providing keywords, CV, or job preferences\n"
+            "- Saying yes/no/hello or general conversation\n\n"
+            "The message may be in English, Hebrew, or Russian.\n\n"
+            f"Message: {text}\n\n"
+            'Return ONLY a JSON object: {"admin_command": "report"} or {"admin_command": "history"} '
+            'or {"admin_command": "status"} or {"admin_command": null}'
+        )
+        req_body = json.dumps(
+            {
+                "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "max_tokens": 30,
+            }
+        ).encode()
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=req_body,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        content = data["choices"][0]["message"]["content"]
+        m = re.search(r"\{.*\}", content, re.S)
+        if not m:
+            return _classify_admin_intent_regex(text)
+        parsed = json.loads(m.group())
+        cmd = parsed.get("admin_command")
+        if cmd in ("report", "history", "status"):
+            return cmd
+        return None
+    except Exception:
+        return _classify_admin_intent_regex(text)
+
+
+def _classify_admin_intent_regex(body: str) -> Optional[str]:
+    """Broad regex fallback for admin intent classification (EN/HE/RU)."""
+    lower = (body or "").lower().strip()
+
+    # Negative gate: if the message clearly wants a job search, bail out early
+    if re.search(
+        r"\b(run|start|launch|send)\s+(search|jobs|digest|report)"
+        r"|\bdigest\b"
+        r"|\bjob\s+report\b"
+        r"|\bsearch\s+(again|for)\b"
+        r"|\bcurrent\s+filter\b"
+        r"|\bgenerate\s+report\b"
+        r"|\bkeywords?\b",
+        lower,
+    ):
+        return None
+
+    _REPORT_RE = re.compile(
+        r"admin\s+(report|history|status)"
+        # "show/send/give me report/status/history/summary"
+        r"|(?:show|send|give|get|email)\s+(?:me\s+)?(?:a\s+)?(?:the\s+)?"
+        r"(?:report|status|history|summary|activity|stats|overview|log)"
+        # "report/status/summary for/last N"
+        r"|(?:report|status|history|summary|activity)\s+(?:for|last|from)\s+\d+"
+        # "report please", "summary please"
+        r"|(?:report|summary|status|activity)\s*(?:please|pls|plz)"
+        # bare leading "report" as the whole message
+        r"|^(?:report|status|history|summary)$"
+        # "what's happening", "what happened", "how are users/things doing"
+        r"|what(?:'?s| is| was)\s+(?:happening|going on|the status|new|up)"
+        r"|what\s+happened"
+        r"|how\s+(?:are|is)\s+(?:users?|things?|the system|it|everything)\s+doing"
+        r"|any\s+(?:activity|news|updates|action)"
+        # Hebrew
+        r"|(?:תראה|שלח|תן)\s+(?:לי\s+)?(?:דו[\"״]?ח|סטטוס|היסטוריה|סיכום|פעילות)"
+        r"|מה\s+(?:המצב|קורה|חדש|קרה|נעשה)"
+        r"|(?:דו[\"״]?ח|סטטוס|סיכום)\s+(?:ל|של|מ)?\s*\d+"
+        r"|^(?:דו[\"״]?ח|סטטוס|סיכום|מצב)$"
+        # Russian
+        r"|(?:покажи|пришли|дай|отправь)\s+(?:мне\s+)?(?:отчет|статус|историю|сводку)"
+        r"|что\s+(?:происходит|нового|случилось)"
+        r"|как\s+(?:дела|обстоят|там)\s+(?:у\s+)?(?:пользовател|систем|дел)"
+        r"|(?:отчет|статус|сводка)\s+(?:за|последние)\s+\d+"
+        r"|^(?:отчет|статус|сводка)$",
+        re.I,
+    )
+    if not _REPORT_RE.search(lower):
+        return None
+
+    if re.search(r"histor|היסטוריה|истори", lower):
+        return "history"
+    if re.search(r"status|סטטוס|מצב|статус", lower):
+        return "status"
+    return "report"
 
 
 def _wants_same_data(text: str) -> bool:
@@ -181,17 +299,90 @@ class ConversationEngine:
         self.db.update_user(user.id, meta=meta)
         return self.db.get_or_create(user.email)
 
+    def _try_admin_command(
+        self, user: UserRecord, mail: InboundMail, thread_meta: dict[str, Any], body: str
+    ) -> Optional[str]:
+        from orchestrator.admin_report import is_admin, build_report
+
+        if not is_admin(mail.from_email):
+            return None
+        cmd = _classify_admin_intent(body)
+        if cmd is None:
+            return None
+
+        lower = body.lower().strip()
+        days: Optional[int] = None
+        m = re.search(r"(\d+)\s*d(?:ays?)?", lower)
+        if m:
+            days = int(m.group(1))
+
+        filter_email: Optional[str] = None
+        em = re.search(r"user[=:\s]+(\S+@\S+)", lower)
+        if em:
+            filter_email = em.group(1)
+
+        report_text = build_report(self.db, days=days, user_email=filter_email)
+        admin_sent = False
+        try:
+            self._send_thread_reply(user, mail, thread_meta, report_text)
+            admin_sent = True
+        except Exception as exc:
+            print(f"Failed to send admin report: {exc}", flush=True)
+        self.db.log_conversation(
+            direction="outbound",
+            user_email=mail.from_email,
+            subject=mail.subject,
+            body_snippet="[admin report]",
+            action="admin_report",
+            state_before=user.state,
+            state_after=user.state,
+            message_id=None,
+        )
+        if admin_sent:
+            self.db.mark_replied(mail.message_id)
+        return report_text
+
+    @staticmethod
+    def _infer_action(state_before: str, state_after: str, body: str) -> str:
+        if state_before == "new":
+            return "welcome"
+        if state_after == "running":
+            return "run_search"
+        if state_after == "keyword_approval":
+            return "keyword_review"
+        if state_before == "collecting" and state_after == "collecting":
+            return "collect_info"
+        if state_before != state_after:
+            return f"state:{state_before}->{state_after}"
+        return "reply"
+
     def handle(self, mail: InboundMail) -> list[str]:
         if is_ignored_inbound(mail):
             return []
         if not self.db.log_inbound(mail.message_id, mail.from_email, mail.subject):
             return []
         user = self.db.get_or_create(mail.from_email)
+        state_before = user.state
         self.db.update_user(user.id, last_inbound_at=_utc_now())
         replies: list[str] = []
         thread_meta = self._update_thread_meta(user, mail)
 
         body = strip_quoted_reply(mail.body_text).strip()
+        self.db.log_conversation(
+            direction="inbound",
+            user_email=mail.from_email,
+            subject=mail.subject,
+            body_snippet=body[:200],
+            action=None,
+            state_before=state_before,
+            state_after=None,
+            message_id=mail.message_id,
+        )
+
+        admin_reply = self._try_admin_command(user, mail, thread_meta, body)
+        if admin_reply is not None:
+            return [admin_reply] if admin_reply else []
+
         user = self._sync_reply_language(user, body)
         cv_path = _save_cv(user, mail.attachments, body)
         keywords = _extract_keywords(body)
@@ -238,22 +429,42 @@ class ConversationEngine:
                 )
 
         elif user.state == "keyword_approval":
-            replies.extend(self._handle_keyword_approval(user, mail, body))
+            replies.extend(self._handle_keyword_approval(user, mail, body, thread_meta))
 
         elif user.state in ("ready", "returning", "scheduled", "report_sent"):
             if _wants_same_data(body) or _wants_run_search(body):
                 q = user.meta.get("approved_keyword_query") or user.keywords
-                replies.append(
-                    self._t(
-                        user,
-                        f"Using your approved keywords. Running search now.\n({q})",
-                        f"משתמשים במילות המפתח שאושרו. מתחיל חיפוש.\n({q})",
-                        f"Используем одобренные ключевые слова. Запускаю поиск.\n({q})",
-                    )
+                ack = self._t(
+                    user,
+                    f"Using your approved keywords. Running search now.\n({q})",
+                    f"משתמשים במילות המפתח שאושרו. מתחיל חיפוש.\n({q})",
+                    f"Используем одобренные ключевые слова. Запускаю поиск.\n({q})",
                 )
+                search_sent = False
+                try:
+                    self._send_thread_reply(user, mail, thread_meta, ack)
+                    search_sent = True
+                except Exception as exc:
+                    print(
+                        f"Failed to send reply to {mail.from_email} subject={mail.subject!r}: {exc}",
+                        flush=True,
+                    )
+                self.db.log_conversation(
+                    direction="outbound",
+                    user_email=mail.from_email,
+                    subject=mail.subject,
+                    body_snippet=ack[:200],
+                    action="run_search",
+                    state_before=state_before,
+                    state_after="running",
+                    message_id=None,
+                )
+                if search_sent:
+                    self.db.mark_replied(mail.message_id)
                 self.db.update_user(user.id, state="running", keywords=q)
                 user = self.db.get_or_create(mail.from_email)
                 self._run_job(user)
+                return []
             elif _wants_new_data(body):
                 meta = dict(user.meta)
                 meta.pop("keyword_proposals", None)
@@ -393,15 +604,90 @@ class ConversationEngine:
                     )
                 )
 
+        user_after = self.db.get_or_create(mail.from_email)
+        state_after = user_after.state
+
+        if not replies and state_before == state_after:
+            replies.append(
+                self._t(
+                    user,
+                    "Got your message. Reply 1 for saved search, 2 for new data, or 'help' for options.",
+                    "קיבלנו את ההודעה. השיבו 1 לחיפוש שמור, 2 לנתונים חדשים, או 'help' לאפשרויות.",
+                    "Получили ваше сообщение. Ответьте 1 — сохранённый поиск, 2 — новые данные, или help.",
+                )
+            )
+
+        action = self._infer_action(state_before, state_after, body)
+        send_ok = False
         for reply in replies:
             try:
                 self._send_thread_reply(user, mail, thread_meta, reply)
+                send_ok = True
             except Exception as exc:
                 print(
                     f"Failed to send reply to {mail.from_email} subject={mail.subject!r}: {exc}",
                     flush=True,
                 )
+            self.db.log_conversation(
+                direction="outbound",
+                user_email=mail.from_email,
+                subject=mail.subject,
+                body_snippet=reply[:200],
+                action=action,
+                state_before=state_before,
+                state_after=state_after,
+                message_id=None,
+            )
+        if send_ok:
+            self.db.mark_replied(mail.message_id)
         return replies
+
+    def retry_unreplied(self, min_age_seconds: int = 120, max_retries: int = 3) -> int:
+        """Retry sending replies for messages that were received but never got a reply."""
+        from orchestrator.email_client import send_reply
+        from orchestrator.admin_report import is_admin
+
+        unreplied = self.db.get_unreplied(min_age_seconds=min_age_seconds, max_retries=max_retries)
+        retried = 0
+        for row in unreplied:
+            msg_id = row["message_id"]
+            email = row["from_email"]
+            subject = row.get("subject") or "Job assistance"
+            self.db.increment_retry(msg_id)
+            user = self.db.get_or_create(email)
+
+            fallback = self._t(
+                user,
+                "Sorry for the delay. Reply 1 for saved search, 2 for new data, or 'help'.",
+                "מתנצלים על העיכוב. השיבו 1 לחיפוש שמור, 2 לנתונים חדשים, או 'help'.",
+                "Извините за задержку. Ответьте 1 — сохранённый поиск, 2 — новые данные, или help.",
+            )
+            try:
+                send_reply(email, subject, fallback, in_reply_to=msg_id, references=msg_id)
+                self.db.mark_replied(msg_id)
+                retried += 1
+            except Exception as exc:
+                print(f"Retry failed for {email} msg={msg_id}: {exc}", flush=True)
+                if row["retry_count"] + 1 >= max_retries:
+                    self.db.mark_dead_letter(msg_id)
+                    self._alert_admin_dead_letter(email, subject, msg_id)
+        return retried
+
+    def _alert_admin_dead_letter(self, user_email: str, subject: str, message_id: str) -> None:
+        from orchestrator.email_client import send_reply
+        from orchestrator.admin_report import _ADMIN_EMAIL
+
+        alert = (
+            f"ALERT: Failed to reply to user after max retries.\n"
+            f"User: {user_email}\n"
+            f"Subject: {subject}\n"
+            f"Message-ID: {message_id}\n\n"
+            f"Please investigate manually."
+        )
+        try:
+            send_reply(_ADMIN_EMAIL, "Dead letter alert", alert)
+        except Exception:
+            print(f"CRITICAL: Cannot send dead-letter alert for {user_email}", flush=True)
 
     def _update_thread_meta(self, user: UserRecord, mail: InboundMail) -> dict[str, Any]:
         from orchestrator.email_client import decode_subject
@@ -429,11 +715,17 @@ class ConversationEngine:
         thread_meta: dict[str, Any],
         body: str,
     ) -> None:
-        from orchestrator.email_client import send_reply
+        from orchestrator.email_client import send_reply, _clean_header
 
-        subject = thread_meta.get("thread_subject") or mail.subject or "Job assistance"
-        in_reply_to = thread_meta.get("thread_last_inbound_id") or mail.message_id
-        references = thread_meta.get("thread_references") or in_reply_to
+        subject = _clean_header(
+            thread_meta.get("thread_subject") or mail.subject or "Job assistance"
+        )
+        in_reply_to = _clean_header(
+            thread_meta.get("thread_last_inbound_id") or mail.message_id
+        )
+        references = _clean_header(
+            thread_meta.get("thread_references") or in_reply_to
+        )
         outbound_id = send_reply(
             mail.from_email,
             subject,
@@ -467,7 +759,9 @@ class ConversationEngine:
         )
         return format_approval_email(review, self._lang(user))
 
-    def _handle_keyword_approval(self, user: UserRecord, mail: InboundMail, body: str) -> list[str]:
+    def _handle_keyword_approval(
+        self, user: UserRecord, mail: InboundMail, body: str, thread_meta: dict[str, Any]
+    ) -> list[str]:
         review = KeywordReview.from_meta(user.meta)
         if not review:
             return [self._begin_keyword_review(user)]
@@ -524,24 +818,30 @@ class ConversationEngine:
         en_list = "\n".join(f"  • {o.en} / {o.he}" for o in chosen)
         self.db.update_user(user.id, state="running", keywords=approved_query, meta=meta)
         user = self.db.get_or_create(mail.from_email)
-        self._run_job(user)
-        return [
-            self._t(
-                user,
-                "Approved — starting job search with:\n"
-                f"{en_list}\n\n"
-                f"LinkedIn query:\n{approved_query}\n\n"
-                "The job digest will arrive in this same email thread shortly.",
-                "אושר — מתחיל חיפוש עם:\n"
-                f"{en_list}\n\n"
-                f"שאילתת LinkedIn:\n{approved_query}\n\n"
-                "דוח המשרות יגיע בשרשור המייל הזה בקרוב.",
-                "Одобрено — запускаю поиск:\n"
-                f"{en_list}\n\n"
-                f"Запрос LinkedIn:\n{approved_query}\n\n"
-                "Дайджест придёт в этом же почтовом потоке.",
+        ack = self._t(
+            user,
+            "Approved — starting job search with:\n"
+            f"{en_list}\n\n"
+            f"LinkedIn query:\n{approved_query}\n\n"
+            "The job digest will arrive in this same email thread shortly.",
+            "אושר — מתחיל חיפוש עם:\n"
+            f"{en_list}\n\n"
+            f"שאילתת LinkedIn:\n{approved_query}\n\n"
+            "דוח המשרות יגיע בשרשור המייל הזה בקרוב.",
+            "Одобрено — запускаю поиск:\n"
+            f"{en_list}\n\n"
+            f"Запрос LinkedIn:\n{approved_query}\n\n"
+            "Дайджест придёт в этой же цепочке писем.",
+        )
+        try:
+            self._send_thread_reply(user, mail, thread_meta, ack)
+        except Exception as exc:
+            print(
+                f"Failed to send reply to {mail.from_email} subject={mail.subject!r}: {exc}",
+                flush=True,
             )
-        ]
+        self._run_job(user)
+        return []
 
     def _welcome_new(self, user: UserRecord) -> str:
         return self._t(

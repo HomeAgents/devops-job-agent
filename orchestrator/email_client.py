@@ -93,18 +93,19 @@ def send_reply(
     """Send a plain-text reply in the user's thread. Returns outbound Message-ID."""
     smtp_user, smtp_pass, from_name, from_addr = _smtp_settings()
     msg = EmailMessage()
-    msg["Subject"] = reply_subject(subject)
+    msg["Subject"] = _clean_header(reply_subject(subject))
     msg["From"] = formataddr((from_name, from_addr))
     msg["To"] = to_email
     outbound_id = make_msgid(domain=from_addr.split("@")[-1] if "@" in from_addr else None)
     msg["Message-ID"] = outbound_id
     if in_reply_to:
-        msg["In-Reply-To"] = in_reply_to
-        ref_chain = (references or "").strip()
-        if ref_chain and in_reply_to not in ref_chain:
-            msg["References"] = f"{ref_chain} {in_reply_to}".strip()
+        clean_reply_to = _clean_header(in_reply_to)
+        msg["In-Reply-To"] = clean_reply_to
+        ref_chain = _clean_header(references or "")
+        if ref_chain and clean_reply_to not in ref_chain:
+            msg["References"] = f"{ref_chain} {clean_reply_to}"
         else:
-            msg["References"] = ref_chain or in_reply_to
+            msg["References"] = ref_chain or clean_reply_to
     msg.set_content(body.strip() + "\n")
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(smtp_user, smtp_pass)
@@ -241,13 +242,13 @@ def fetch_inbound(
             raw = msg_data[0][1]
             msg = email.message_from_bytes(raw)
             _, addr = parseaddr(msg.get("From", ""))
-            message_id = msg.get("Message-ID") or f"local-{num.decode()}"
+            message_id = _clean_header(msg.get("Message-ID") or f"local-{num.decode()}")
             if message_id in known:
                 continue
-            subject = msg.get("Subject") or ""
+            subject = decode_subject(msg.get("Subject") or "")
             body = _extract_text(msg)
             attachments = _extract_attachments(msg)
-            references = msg.get("References") or ""
+            references = _clean_header(msg.get("References") or "")
             if not addr:
                 continue
             mails.append(
