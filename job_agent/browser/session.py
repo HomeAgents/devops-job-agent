@@ -169,7 +169,6 @@ def open_linkedin_login(cfg: Dict[str, Any], *, wait_minutes: int = 10) -> bool:
     return logged_in
 
 
-@contextmanager
 def _browser_lock_path(service: str) -> Path:
     lock_dir = Path(os.getenv("ORCHESTRATOR_DATA_DIR", str(Path.home() / "orchestrator-data")))
     lock_dir.mkdir(parents=True, exist_ok=True)
