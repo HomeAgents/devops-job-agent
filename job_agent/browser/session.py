@@ -273,7 +273,6 @@ def open_google_login(cfg: Dict[str, Any], *, wait_minutes: int = 10) -> bool:
 
 
 @contextmanager
-@contextmanager
 def with_google_context(cfg: Dict[str, Any], *, headless: bool | None = None) -> Generator[Tuple, None, None]:
     """Context manager yielding (playwright, browser_context) for Google Web.
     Acquires a cross-process lock to prevent concurrent Google sessions."""
