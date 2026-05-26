@@ -52,6 +52,9 @@ def _israel_or_il_signals_match(j: Job, cfg: Dict[str, Any], aliases: List[str])
     link = (j.link or "").lower()
     strict_loc_title = bool(cfg.get("location_hint_strict_location_or_title", False))
 
+    if _location_is_explicitly_non_israel(loc):
+        return False
+
     if strict_loc_title:
         if _has_alias(f"{loc} {title}", aliases):
             return True
@@ -86,11 +89,6 @@ def _israel_or_il_signals_match(j: Job, cfg: Dict[str, Any], aliases: List[str])
 
     if sl.startswith("rss:") and (loc.strip().lower() == "israel" or _has_alias(loc, aliases)):
         return True
-
-    # For ATS sources (greenhouse/lever): reject if location explicitly names
-    # a non-Israel country, even if the job description mentions Israel.
-    if _location_is_explicitly_non_israel(loc):
-        return False
 
     include_desc = bool(cfg.get("location_hint_include_job_description", False)) and not strict_loc_title
     if include_desc and isinstance(j.raw, dict):
