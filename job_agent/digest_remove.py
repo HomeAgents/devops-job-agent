@@ -293,11 +293,9 @@ def build_set_status_url(link: str, status: str, cfg: Dict[str, Any]) -> str:
 
 def _html_page(title: str, body: str, *, status: int = 200, cfg: Optional[Dict[str, Any]] = None) -> bytes:
     page = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>{title}</title></head>
+<html><head><meta charset="utf-8"><title>Job Agent</title></head>
 <body style="font-family:sans-serif;max-width:42em;margin:2em auto;line-height:1.5;">
-<h1>{title}</h1>
 {body}
-<p style="color:#999;font-size:12px;">Job Agent</p>
 </body></html>"""
     return page.encode("utf-8")
 
@@ -345,18 +343,8 @@ def _apply_remove(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
         except ValueError:
             tracker_note = ""
     if added:
-        return (
-            True,
-            f"<p><strong>Removed.</strong> «{html.escape(str(title))}» will not appear in "
-            f"future digest emails.</p>"
-            f"{tracker_note}",
-        )
-    return (
-        False,
-        f"<p><strong>Already removed.</strong> «{html.escape(str(title))}» was already hidden "
-        f"from future digests.</p>"
-        f"{tracker_note}",
-    )
+        return True, "<p>Done.</p>"
+    return False, "<p>Already removed.</p>"
 
 
 def _project_root(cfg: Dict[str, Any]) -> "Path":
@@ -405,12 +393,8 @@ def _apply_set_status(link: str, status: str, cfg: Dict[str, Any]) -> Tuple[bool
     try:
         canonical = set_job_tracker_status(link, status, cfg, root=root, job_snapshot=snapshot)
     except ValueError:
-        return False, "<p>Could not update status. Please try again.</p>"
-    tracker_msg = (
-        f"<p><strong>Status updated.</strong> Set to <strong>{html.escape(canonical)}</strong>.</p>"
-        f"<p style=\"font-size:13px;color:#666;\">This will be reflected in your next digest email.</p>"
-    )
-    return True, tracker_msg
+        return False, "<p>Error. Please try again.</p>"
+    return True, f"<p>Status updated.</p>"
 
 
 def _apply_mark_applied(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
@@ -435,11 +419,7 @@ def _apply_mark_applied(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
         conn.close()
     when = record_job_apply(link, snapshot, cfg, root=_project_root(cfg))
     title = snapshot.get("Job Title") or link
-    return True, (
-        f"<p><strong>Marked applied.</strong> «{html.escape(str(title))}» — Status set to "
-        f"<strong>In Progress</strong>.</p>"
-        f"<p style=\"font-size:13px;color:#666;\">This will be reflected in your next digest email.</p>"
-    )
+    return True, "<p>Done.</p>"
 
 
 def _apply_restore(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
@@ -448,7 +428,7 @@ def _apply_restore(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
 
     snapshot = restore_removed_link(link, cfg)
     if snapshot is None:
-        return False, "<p><strong>Not found.</strong> This job was not on your removed list.</p>"
+        return False, "<p>Not found.</p>"
     job = record_to_job(snapshot)
     conn = _db_connect(cfg)
     try:
@@ -457,13 +437,7 @@ def _apply_restore(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
         conn.commit()
     finally:
         conn.close()
-    title = snapshot.get("title") or job.title or link
-    return (
-        True,
-        f"<p><strong>Restored.</strong> «{html.escape(str(title))}» will return to "
-        "<strong>Jobs in this digest</strong> on the next email (within the usual "
-        f"{int((cfg.get('digest_include_jobs_seen_within_days') or 2))}-day window).</p>",
-    )
+    return True, "<p>Restored.</p>"
 
 
 _RATE_LIMIT_WINDOW = 60

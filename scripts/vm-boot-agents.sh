@@ -9,6 +9,12 @@ if command -v az >/dev/null 2>&1; then
 fi
 
 JOB_ROOT="${HOME}/apps/devops-job-agent"
+
+# Mark activity on boot so the idle-check in poll-inbox doesn't immediately
+# deallocate the VM before morning cron jobs have a chance to run.
+ACTIVITY_FILE="${ORCHESTRATOR_ACTIVITY_FILE:-${HOME}/orchestrator-data/last_activity}"
+mkdir -p "$(dirname "$ACTIVITY_FILE")"
+date -u +"%Y-%m-%dT%H:%M:%S+00:00" > "$ACTIVITY_FILE"
 if [[ -x "${JOB_ROOT}/scripts/digest-remove-server.sh" ]]; then
   if ! pgrep -f "run.py --digest-remove-server" >/dev/null 2>&1; then
     nohup bash "${JOB_ROOT}/scripts/digest-remove-server.sh" arkadiy.kats@gmail.com \
