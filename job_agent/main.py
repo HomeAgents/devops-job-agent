@@ -111,7 +111,8 @@ def parse_sources_arg(raw: str | None) -> Set[str] | None:
 def _keywords_from_config(cfg: Dict[str, Any]) -> str:
     """Extract a short keyword summary from the linkedin config block."""
     li = cfg.get("linkedin") if isinstance(cfg.get("linkedin"), dict) else {}
-    raw = li.get("keywords_raw") or li.get("keywords") or ""
+    js = li.get("jobs_search") if isinstance(li.get("jobs_search"), dict) else {}
+    raw = js.get("keywords") or li.get("keywords_raw") or li.get("keywords") or ""
     if isinstance(raw, list):
         raw = ", ".join(str(k) for k in raw)
     raw = str(raw).strip()
