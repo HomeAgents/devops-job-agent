@@ -60,14 +60,30 @@ def dedupe_jobs(jobs: List[Job]) -> List[Job]:
         by_link[key] = job if prev is None else _pick_better_job(job, prev)
 
     kept: List[Job] = []
+    tc_index: Dict[tuple[str, str], int] = {}
     for job in list(by_link.values()) + no_link:
+        tc_key = job_title_company_key(job.title, job.company)
+        if tc_key[0] and tc_key[1]:
+            idx = tc_index.get(tc_key)
+            if idx is not None:
+                kept[idx] = _pick_better_job(job, kept[idx])
+                continue
         merged = False
         for i, prev in enumerate(kept):
             if jobs_same_posting(job, prev):
                 kept[i] = _pick_better_job(job, prev)
+                tc_prev = job_title_company_key(prev.title, prev.company)
+                if tc_prev[0] and tc_prev[1]:
+                    tc_index[tc_prev] = i
+                tc_new = job_title_company_key(kept[i].title, kept[i].company)
+                if tc_new[0] and tc_new[1]:
+                    tc_index[tc_new] = i
                 merged = True
                 break
         if not merged:
+            new_idx = len(kept)
             kept.append(job)
+            if tc_key[0] and tc_key[1]:
+                tc_index[tc_key] = new_idx
 
     return sorted(kept, key=lambda x: (-x.score, x.title))

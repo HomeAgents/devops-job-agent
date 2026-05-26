@@ -549,14 +549,10 @@ def _build_digest_html(
     if isinstance(custom_intro, str) and custom_intro.strip():
         intro = f"<p style=\"font-family:sans-serif;font-size:14px;\">{custom_intro.strip()}</p>"
     if digest_note.strip():
-        note = digest_note.strip()
-        if "<" in note and ">" in note:
-            intro += f"<p style=\"font-family:sans-serif;font-size:14px;\">{note}</p>"
-        else:
-            intro += (
-                f"<p style=\"font-family:sans-serif;font-size:14px;\">"
-                f"{html.escape(note)}</p>"
-            )
+        intro += (
+            f"<p style=\"font-family:sans-serif;font-size:14px;\">"
+            f"{html.escape(digest_note.strip())}</p>"
+        )
     only_new = bool(cfg.get("digest_email_only_new", False))
 
     if table_action != "restore" and not jobs_df.empty:

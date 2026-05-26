@@ -76,14 +76,23 @@ def remove_secret(cfg: Dict[str, Any]) -> str:
         if env:
             base_secret = env
     if not base_secret:
-        print(
-            "WARNING: No HMAC secret configured for digest action links. "
-            "Set JOB_AGENT_REMOVE_SECRET env var or digest_remove.secret in config. "
-            "Using auto-derived fallback (predictable from filesystem path).",
-            file=sys.stderr,
-        )
-        path = ignore_store_path(cfg)
-        base_secret = hashlib.sha256(f"job-agent-remove:{path}".encode()).hexdigest()
+        secret_file = Path.home() / ".job-agent" / ".digest-remove-secret"
+        if secret_file.is_file():
+            base_secret = secret_file.read_text(encoding="utf-8").strip()
+        if not base_secret:
+            import secrets
+            base_secret = secrets.token_hex(32)
+            secret_file.parent.mkdir(parents=True, exist_ok=True)
+            secret_file.write_text(base_secret + "\n", encoding="utf-8")
+            try:
+                os.chmod(str(secret_file), 0o600)
+            except OSError:
+                pass
+            print(
+                f"Generated HMAC secret and saved to {secret_file}. "
+                "Set JOB_AGENT_REMOVE_SECRET env var for explicit control.",
+                file=sys.stderr,
+            )
     user_email = _user_email_from_cfg(cfg).strip().lower()
     if user_email:
         return hashlib.sha256(f"{base_secret}:{user_email}".encode()).hexdigest()
@@ -215,7 +224,7 @@ def sign_action_token(
     if email:
         payload["user"] = email
     body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
-    sig = hmac.new(remove_secret(cfg).encode(), body.encode(), hashlib.sha256).hexdigest()[:32]
+    sig = hmac.new(remove_secret(cfg).encode(), body.encode(), hashlib.sha256).hexdigest()
     return f"{body}.{sig}"
 
 
@@ -224,7 +233,7 @@ def _decode_action_token(token: str, cfg: Dict[str, Any]) -> Tuple[Optional[Dict
     if "." not in token:
         return None, "Invalid token"
     body, sig = token.rsplit(".", 1)
-    expected_sig = hmac.new(remove_secret(cfg).encode(), body.encode(), hashlib.sha256).hexdigest()[:32]
+    expected_sig = hmac.new(remove_secret(cfg).encode(), body.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected_sig, sig):
         return None, "Invalid signature"
     try:
@@ -444,6 +453,7 @@ def _apply_restore(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
 
 _RATE_LIMIT_WINDOW = 60
 _RATE_LIMIT_MAX = 30
+_RATE_HITS_MAX_IPS = 10000
 _rate_lock = threading.Lock()
 _rate_hits: Dict[str, collections.deque] = {}
 
@@ -460,6 +470,10 @@ def _rate_limited(ip: str) -> bool:
         if len(dq) >= _RATE_LIMIT_MAX:
             return True
         dq.append(now)
+        if len(_rate_hits) > _RATE_HITS_MAX_IPS:
+            stale = [k for k, v in _rate_hits.items() if not v]
+            for k in stale:
+                del _rate_hits[k]
     return False
 
 

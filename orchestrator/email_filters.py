@@ -72,6 +72,10 @@ def _is_rate_limited(from_addr: str) -> bool:
     if len(_sender_timestamps[from_addr]) >= _RATE_LIMIT_MAX:
         return True
     _sender_timestamps[from_addr].append(now)
+    if len(_sender_timestamps) > 1000:
+        stale = [k for k, v in _sender_timestamps.items() if not v]
+        for k in stale:
+            del _sender_timestamps[k]
     return False
 
 

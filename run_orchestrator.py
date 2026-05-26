@@ -130,9 +130,13 @@ def cmd_daily(args: argparse.Namespace) -> int:
     errors = 0
 
     def _run_one(user):
-        print(f"  -> {user.email}")
-        db.update_user(user.id, state="running")
-        return user.email, run_docker_job(user, db)
+        try:
+            print(f"  -> {user.email}")
+            db.update_user(user.id, state="running")
+            return user.email, run_docker_job(user, db)
+        except Exception as exc:
+            print(f"  !! {user.email} failed: {exc}", file=sys.stderr)
+            return user.email, 1
 
     if len(users) <= 1 or max_parallel <= 1:
         for user in users:

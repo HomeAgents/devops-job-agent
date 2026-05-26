@@ -44,7 +44,10 @@ def _save_cv(user: UserRecord, attachments: list[tuple[str, bytes]], body: str) 
             if len(data) > _MAX_CV_BYTES:
                 print(f"Skipping attachment {name}: {len(data)} bytes exceeds {_MAX_CV_BYTES} limit", flush=True)
                 continue
-            dest = work / Path(name).name
+            safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', Path(name).name)
+            if not safe_name or safe_name.startswith('.'):
+                safe_name = 'attachment' + Path(name).suffix
+            dest = work / safe_name
             dest.write_bytes(data)
             return str(dest)
     cleaned = strip_quoted_reply(body)
@@ -148,6 +151,7 @@ def _classify_user_intent(text: str, user_keywords: str) -> Optional[str]:
     """
     api_key = os.environ.get("OPENAI_API_KEY", "")
     body = strip_email_signature(strip_quoted_reply(text)).strip()[:400]
+    body = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', body)
     if not api_key or not body:
         return None
     try:
@@ -186,8 +190,17 @@ def _classify_user_intent(text: str, user_keywords: str) -> Optional[str]:
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
+        last_exc = None
+        for _attempt in range(2):
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode())
+                break
+            except Exception as e:
+                last_exc = e
+                continue
+        else:
+            raise last_exc
         content = data["choices"][0]["message"]["content"]
         m = re.search(r"\{.*\}", content, re.S)
         if not m:
@@ -209,6 +222,7 @@ def _classify_admin_intent(body: str) -> Optional[str]:
     """
     api_key = os.environ.get("OPENAI_API_KEY", "")
     text = body.strip()[:300]
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
     if not api_key or not text:
         return _classify_admin_intent_regex(text)
     try:
@@ -245,8 +259,17 @@ def _classify_admin_intent(body: str) -> Optional[str]:
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
+        last_exc = None
+        for _attempt in range(2):
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode())
+                break
+            except Exception as e:
+                last_exc = e
+                continue
+        else:
+            raise last_exc
         content = data["choices"][0]["message"]["content"]
         m = re.search(r"\{.*\}", content, re.S)
         if not m:
@@ -318,13 +341,10 @@ def _classify_admin_intent_regex(body: str) -> Optional[str]:
 
 def _wants_pause(text: str) -> bool:
     t = strip_email_signature(strip_quoted_reply(text)).lower()
-    return any(
-        w in t
-        for w in (
-            "stop", "pause", "unsubscribe", "cancel", "הפסק", "עצור", "בטל",
-            "стоп", "пауза", "отписаться", "отмена",
-        )
-    )
+    return bool(re.search(
+        r'\b(stop|pause|unsubscribe|cancel|הפסק|עצור|בטל|стоп|пауза|отписаться|отмена)\b',
+        t
+    ))
 
 
 def _wants_help(text: str) -> bool:
@@ -999,25 +1019,29 @@ class ConversationEngine:
 
         sent = 0
         for user in self.db.users_needing_feedback(minutes_after):
-            if not user.meta.get("first_execution_complete"):
+            try:
+                if not user.meta.get("first_execution_complete"):
+                    continue
+                subject = user.meta.get("thread_subject") or "Job search feedback"
+                in_reply_to = user.meta.get("thread_last_outbound_id") or user.meta.get("thread_last_inbound_id")
+                references = user.meta.get("thread_references")
+                send_reply(
+                    user.email,
+                    subject,
+                    "How was today's job digest? Reply 'good' to get weekday reports at 09:00, "
+                    "or tell us which days you prefer (daily / weekdays / sun,tue,thu).",
+                    in_reply_to=in_reply_to,
+                    references=references,
+                )
+                self.db.update_user(
+                    user.id,
+                    feedback_sent_at=_utc_now(),
+                    pending_feedback=False,
+                    state="feedback",
+                    last_outbound_at=_utc_now(),
+                )
+                sent += 1
+            except Exception as exc:
+                print(f"Feedback prompt failed for {user.email}: {exc}", file=sys.stderr)
                 continue
-            subject = user.meta.get("thread_subject") or "Job search feedback"
-            in_reply_to = user.meta.get("thread_last_outbound_id") or user.meta.get("thread_last_inbound_id")
-            references = user.meta.get("thread_references")
-            send_reply(
-                user.email,
-                subject,
-                "How was today's job digest? Reply 'good' to get weekday reports at 09:00, "
-                "or tell us which days you prefer (daily / weekdays / sun,tue,thu).",
-                in_reply_to=in_reply_to,
-                references=references,
-            )
-            self.db.update_user(
-                user.id,
-                feedback_sent_at=_utc_now(),
-                pending_feedback=False,
-                state="feedback",
-                last_outbound_at=_utc_now(),
-            )
-            sent += 1
         return sent

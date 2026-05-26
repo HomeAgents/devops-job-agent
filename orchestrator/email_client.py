@@ -133,7 +133,10 @@ def _extract_text(msg: email.message.Message) -> str:
                 continue
             payload = part.get_payload(decode=True) or b""
             charset = part.get_content_charset() or "utf-8"
-            chunk = payload.decode(charset, errors="replace")
+            try:
+                chunk = payload.decode(charset, errors="replace")
+            except LookupError:
+                chunk = payload.decode("utf-8", errors="replace")
             if ctype == "text/plain":
                 plain.append(chunk)
             elif ctype == "text/html":
@@ -141,7 +144,10 @@ def _extract_text(msg: email.message.Message) -> str:
     else:
         payload = msg.get_payload(decode=True) or b""
         charset = msg.get_content_charset() or "utf-8"
-        chunk = payload.decode(charset, errors="replace")
+        try:
+            chunk = payload.decode(charset, errors="replace")
+        except LookupError:
+            chunk = payload.decode("utf-8", errors="replace")
         if msg.get_content_type() == "text/html":
             html.append(chunk)
         else:
@@ -268,14 +274,17 @@ def fetch_inbound(
                 )
             )
             if num in unseen_ids:
-                imap.store(num, "+FLAGS", "\\Seen")
+                try:
+                    imap.store(num, "+FLAGS", "\\Seen")
+                except Exception as exc:
+                    print(f"IMAP store \\Seen failed for {num}: {exc}", file=sys.stderr)
     return mails
 
 
 def cleanup_mailbox(
     *,
     max_age_days: int = 7,
-    folders: tuple[str, ...] = ("INBOX", "[Gmail]/Sent Mail", "[Gmail]/Trash"),
+    folders: tuple[str, ...] = ("INBOX", "[Gmail]/Trash"),
     dry_run: bool = False,
 ) -> dict[str, int]:
     """Delete emails older than max_age_days from specified Gmail folders.

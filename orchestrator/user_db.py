@@ -10,6 +10,11 @@ from typing import Any, Iterable, Optional
 
 _WEEKDAY_NAMES = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
 
+VALID_STATES = frozenset({
+    "new", "collecting", "keyword_approval", "ready",
+    "returning", "scheduled", "report_sent", "running", "feedback",
+})
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -44,7 +49,7 @@ class UserDB:
         self._init_schema()
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.path))
+        conn = sqlite3.connect(str(self.path), timeout=30)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -179,6 +184,8 @@ class UserDB:
         fields: list[str] = []
         values: list[Any] = []
         if state is not None:
+            if state not in VALID_STATES:
+                raise ValueError(f"Invalid user state: {state!r}")
             fields.append("state = ?")
             values.append(state)
         if cv_path is not None:

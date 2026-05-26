@@ -49,7 +49,7 @@ def _pick_user_agent(cfg: Dict[str, Any]) -> str:
     if explicit:
         return explicit
     seed = str(block.get("user_data_dir") or "default")
-    idx = int(hashlib.md5(seed.encode()).hexdigest(), 16) % len(_DEFAULT_USER_AGENTS)
+    idx = int(hashlib.sha256(seed.encode()).hexdigest(), 16) % len(_DEFAULT_USER_AGENTS)
     return _DEFAULT_USER_AGENTS[idx]
 
 

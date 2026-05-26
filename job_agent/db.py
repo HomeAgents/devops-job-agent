@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from job_agent.models import Job
-from job_agent.util import job_links_same_posting, normalize_url
+from job_agent.util import job_link_identity, job_links_same_posting, normalize_url
 
 
 def _utc_now_iso() -> str:
@@ -37,6 +37,12 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE jobs ADD COLUMN description TEXT")
         except sqlite3.OperationalError:
             pass
+    if "link_identity" not in cols:
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN link_identity TEXT")
+        except sqlite3.OperationalError:
+            pass
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_link_identity ON jobs(link_identity)")
     # Legacy link-only rows: treat as already emailed so they are not bulk-sent once.
     conn.execute(
         "UPDATE jobs SET emailed_at = COALESCE(emailed_at, ?) WHERE payload IS NULL",
@@ -120,24 +126,25 @@ def upsert_jobs(conn: sqlite3.Connection, jobs: List[Job], *, mark_emailed: bool
                 raw=job.raw,
             )
         payload = job_to_payload(job)
+        identity = job_link_identity(job.link) or None
         emailed_at = now if mark_emailed else None
         cur = conn.execute("SELECT link FROM jobs WHERE link = ?", (job.link,))
         exists = cur.fetchone() is not None
         if exists:
             if mark_emailed:
                 conn.execute(
-                    "UPDATE jobs SET payload = ?, last_seen_at = ?, emailed_at = ? WHERE link = ?",
-                    (payload, now, emailed_at, job.link),
+                    "UPDATE jobs SET payload = ?, last_seen_at = ?, emailed_at = ?, link_identity = ? WHERE link = ?",
+                    (payload, now, emailed_at, identity, job.link),
                 )
             else:
                 conn.execute(
-                    "UPDATE jobs SET payload = ?, last_seen_at = ? WHERE link = ?",
-                    (payload, now, job.link),
+                    "UPDATE jobs SET payload = ?, last_seen_at = ?, link_identity = ? WHERE link = ?",
+                    (payload, now, identity, job.link),
                 )
         else:
             conn.execute(
-                "INSERT INTO jobs (link, first_seen_at, last_seen_at, emailed_at, payload) VALUES (?, ?, ?, ?, ?)",
-                (job.link, now, now, emailed_at, payload),
+                "INSERT INTO jobs (link, first_seen_at, last_seen_at, emailed_at, payload, link_identity) VALUES (?, ?, ?, ?, ?, ?)",
+                (job.link, now, now, emailed_at, payload, identity),
             )
             new_count += 1
     conn.commit()
@@ -151,11 +158,13 @@ def load_job_by_link(conn: sqlite3.Connection, link: str) -> Job | None:
     row = conn.execute("SELECT payload FROM jobs WHERE link = ?", (key,)).fetchone()
     if row and row[0]:
         return job_from_payload(str(row[0]))
-    for (stored_link,) in conn.execute("SELECT link FROM jobs"):
-        if stored_link and job_links_same_posting(str(stored_link), key):
-            row = conn.execute("SELECT payload FROM jobs WHERE link = ?", (stored_link,)).fetchone()
-            if row and row[0]:
-                return job_from_payload(str(row[0]))
+    identity = job_link_identity(key)
+    if identity:
+        row = conn.execute(
+            "SELECT payload FROM jobs WHERE link_identity = ? LIMIT 1", (identity,)
+        ).fetchone()
+        if row and row[0]:
+            return job_from_payload(str(row[0]))
     return None
 
 

@@ -62,8 +62,15 @@ def should_skip_send(cfg: Dict[str, Any], *, slot: str = "") -> Tuple[bool, str]
     except OSError:
         lf = None
     try:
-        ago = minutes_since_last_send(cfg)
-        if ago is None or ago >= min_gap:
+        state = _load(_state_path(cfg))
+        ts = state.get("sent_at_unix")
+        if ts is None:
+            return False, ""
+        try:
+            ago = max(0.0, (time.time() - float(ts)) / 60.0)
+        except (TypeError, ValueError):
+            return False, ""
+        if ago >= min_gap:
             return False, ""
         return True, (
             f"Skipping digest send ({slot or 'digest'}): last email was {ago:.0f} min ago "

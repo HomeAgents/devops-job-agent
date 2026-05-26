@@ -56,28 +56,33 @@ def _load_raw_store(cfg: Dict[str, Any] | None = None) -> Dict[str, Any]:
     return data
 
 
-def _save_raw_store(data: Dict[str, Any], cfg: Dict[str, Any] | None = None) -> Path:
+def _save_raw_store_unlocked(data: Dict[str, Any], cfg: Dict[str, Any] | None = None) -> Path:
+    """Write store file. Caller must hold _store_lock."""
     path = ignore_store_path(cfg)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"version": 2, "removed": data.get("removed") if isinstance(data.get("removed"), list) else []}
     content = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    with _store_lock:
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-        closed = False
-        try:
-            os.write(fd, content.encode("utf-8"))
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    closed = False
+    try:
+        os.write(fd, content.encode("utf-8"))
+        os.close(fd)
+        closed = True
+        os.replace(tmp, str(path))
+    except BaseException:
+        if not closed:
             os.close(fd)
-            closed = True
-            os.replace(tmp, str(path))
-        except BaseException:
-            if not closed:
-                os.close(fd)
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return path
+
+
+def _save_raw_store(data: Dict[str, Any], cfg: Dict[str, Any] | None = None) -> Path:
+    with _store_lock:
+        return _save_raw_store_unlocked(data, cfg)
 
 
 def job_to_removed_record(job: Job, *, removed_at: str | None = None) -> Dict[str, Any]:
@@ -142,20 +147,21 @@ def add_removed_record(record: Dict[str, Any], cfg: Dict[str, Any] | None = None
     link = normalize_url(str(record.get("link") or "").strip())
     if not link:
         return False
-    data = _load_raw_store(cfg)
-    removed: List[Dict[str, Any]] = [
-        x for x in (data.get("removed") or []) if isinstance(x, dict) and normalize_url(str(x.get("link") or "")) != link
-    ]
-    is_new = not any(
-        normalize_url(str(x.get("link") or "")) == link for x in (data.get("removed") or []) if isinstance(x, dict)
-    )
-    row = dict(record)
-    row["link"] = link
-    row.setdefault("link_identity", job_link_identity(link))
-    row.setdefault("removed_at", _utc_now_iso())
-    removed.append(row)
-    data["removed"] = removed
-    _save_raw_store(data, cfg)
+    with _store_lock:
+        data = _load_raw_store(cfg)
+        removed: List[Dict[str, Any]] = [
+            x for x in (data.get("removed") or []) if isinstance(x, dict) and normalize_url(str(x.get("link") or "")) != link
+        ]
+        is_new = not any(
+            normalize_url(str(x.get("link") or "")) == link for x in (data.get("removed") or []) if isinstance(x, dict)
+        )
+        row = dict(record)
+        row["link"] = link
+        row.setdefault("link_identity", job_link_identity(link))
+        row.setdefault("removed_at", _utc_now_iso())
+        removed.append(row)
+        data["removed"] = removed
+        _save_raw_store_unlocked(data, cfg)
     return is_new
 
 
@@ -193,21 +199,22 @@ def restore_removed_link(link: str, cfg: Dict[str, Any] | None = None) -> Dict[s
     key = normalize_url(link.strip())
     if not key:
         return None
-    data = _load_raw_store(cfg)
-    kept: List[Dict[str, Any]] = []
-    found: Dict[str, Any] | None = None
-    for item in data.get("removed") or []:
-        if not isinstance(item, dict):
-            continue
-        item_link = normalize_url(str(item.get("link") or ""))
-        if item_link == key:
-            found = dict(item)
-        else:
-            kept.append(item)
-    if found is None:
-        return None
-    data["removed"] = kept
-    _save_raw_store(data, cfg)
+    with _store_lock:
+        data = _load_raw_store(cfg)
+        kept: List[Dict[str, Any]] = []
+        found: Dict[str, Any] | None = None
+        for item in data.get("removed") or []:
+            if not isinstance(item, dict):
+                continue
+            item_link = normalize_url(str(item.get("link") or ""))
+            if item_link == key:
+                found = dict(item)
+            else:
+                kept.append(item)
+        if found is None:
+            return None
+        data["removed"] = kept
+        _save_raw_store_unlocked(data, cfg)
     return found
 
 

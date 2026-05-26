@@ -22,6 +22,7 @@ job_tracker.xlsx.lock
 *.pdf
 
 # Local overrides (copy from config.json examples)
+config.json
 config.local.json
 
 # Agent state under home dir — also ignore if copied into repo
