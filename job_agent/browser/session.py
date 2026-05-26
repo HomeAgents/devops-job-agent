@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import random
 import sys
 import time
 from contextlib import contextmanager
@@ -62,6 +63,9 @@ def _launch_persistent(cfg: Dict[str, Any], *, headless: bool, service: str = "l
     slow_mo = int(block.get("slow_mo_ms") or 0)
     pw = sync_playwright().start()
 
+    vp_jitter_w = random.randint(-20, 20)
+    vp_jitter_h = random.randint(-10, 10)
+
     extra_args = [
         "--disable-blink-features=AutomationControlled",
         "--disable-features=IsolateOrigins,site-per-process",
@@ -80,16 +84,28 @@ def _launch_persistent(cfg: Dict[str, Any], *, headless: bool, service: str = "l
         str(user_data),
         headless=headless,
         slow_mo=slow_mo,
-        viewport={"width": 1280, "height": 900},
+        viewport={"width": 1280 + vp_jitter_w, "height": 900 + vp_jitter_h},
         locale=(block.get("locale") or "he-IL"),
+        timezone_id=(block.get("timezone_id") or "Asia/Jerusalem"),
         user_agent=_pick_user_agent(cfg),
+        color_scheme="light",
         args=extra_args,
         ignore_default_args=["--enable-automation"],
     )
-    # Hide webdriver flag from navigator
+    _STEALTH_JS = """
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+    Object.defineProperty(navigator, 'languages', {get: () => ['he-IL', 'he', 'en-US', 'en']});
+    window.chrome = {runtime: {}};
+    const origQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (params) =>
+        params.name === 'notifications'
+            ? Promise.resolve({state: Notification.permission})
+            : origQuery(params);
+    """
     for page in context.pages:
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    context.on("page", lambda p: p.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"))
+        page.add_init_script(_STEALTH_JS)
+    context.on("page", lambda p: p.add_init_script(_STEALTH_JS))
     return pw, context
 
 
@@ -130,6 +146,205 @@ def linkedin_session_ready(cfg: Dict[str, Any], *, headless: bool = True) -> boo
         return False
     finally:
         _safe_close(context, pw)
+
+
+def _human_scroll(page, times: int = 3) -> None:
+    """Simulate human-like scrolling with random pauses."""
+    for _ in range(times):
+        distance = random.randint(200, 600)
+        page.mouse.wheel(0, distance)
+        time.sleep(random.uniform(0.8, 2.5))
+
+
+def _human_browse_feed(page) -> None:
+    """Simulate realistic browsing: scroll feed, maybe click a post, wait."""
+    time.sleep(random.uniform(2, 4))
+    _human_scroll(page, times=random.randint(2, 5))
+
+    try:
+        links = page.locator("a[href*='/posts/'], a[href*='/pulse/'], span.feed-shared-actor__name")
+        count = links.count()
+        if count > 2:
+            idx = random.randint(0, min(count - 1, 6))
+            links.nth(idx).click(timeout=5000)
+            time.sleep(random.uniform(4, 12))
+            _human_scroll(page, times=random.randint(1, 3))
+            page.go_back(timeout=15000)
+            time.sleep(random.uniform(1, 3))
+    except Exception:
+        pass
+
+    _human_scroll(page, times=random.randint(1, 3))
+
+
+def linkedin_keepalive(cfg: Dict[str, Any], *, headless: bool = True) -> bool:
+    """Visit LinkedIn feed with human-like browsing to keep session alive.
+
+    Returns True if session is alive after the keepalive visit.
+    """
+    if not playwright_available():
+        return False
+    pw, context = _launch_persistent(cfg, headless=headless, service="linkedin")
+    try:
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto(
+            "https://www.linkedin.com/feed/",
+            wait_until="domcontentloaded",
+            timeout=90_000,
+        )
+        time.sleep(random.uniform(2, 4))
+        if not _page_looks_logged_in(page):
+            return False
+        _human_browse_feed(page)
+        page.goto(
+            "https://www.linkedin.com/jobs/",
+            wait_until="domcontentloaded",
+            timeout=60_000,
+        )
+        time.sleep(random.uniform(2, 5))
+        _human_scroll(page, times=random.randint(1, 2))
+        return _page_looks_logged_in(page)
+    except Exception:
+        return False
+    finally:
+        _safe_close(context, pw)
+
+
+def linkedin_auto_login(cfg: Dict[str, Any], *, headless: bool = True) -> bool:
+    """Attempt automated login using stored credentials.
+
+    Reads LINKEDIN_EMAIL and LINKEDIN_PASSWORD from env or .env.
+    Returns True if login succeeded, False if 2FA or other block.
+    """
+    if not playwright_available():
+        return False
+    email = os.environ.get("LINKEDIN_EMAIL", "").strip()
+    password = os.environ.get("LINKEDIN_PASSWORD", "").strip()
+    if not email or not password:
+        print("linkedin_auto_login: LINKEDIN_EMAIL/LINKEDIN_PASSWORD not set", file=sys.stderr)
+        return False
+
+    pw, context = _launch_persistent(cfg, headless=headless, service="linkedin")
+    try:
+        page = context.pages[0] if context.pages else context.new_page()
+
+        page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=60_000)
+        time.sleep(random.uniform(2, 3))
+        if _page_looks_logged_in(page):
+            print("linkedin_auto_login: already logged in", file=sys.stderr)
+            return True
+
+        page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded", timeout=60_000)
+        time.sleep(random.uniform(1.5, 3))
+
+        email_field = page.locator('#username, input[name="session_key"]')
+        pass_field = page.locator('#password, input[name="session_password"]')
+        if email_field.count() == 0 or pass_field.count() == 0:
+            print("linkedin_auto_login: login form not found", file=sys.stderr)
+            return False
+
+        email_field.first.click()
+        time.sleep(random.uniform(0.3, 0.8))
+        email_field.first.fill("")
+        for ch in email:
+            email_field.first.type(ch, delay=random.randint(30, 120))
+        time.sleep(random.uniform(0.5, 1.0))
+
+        pass_field.first.click()
+        time.sleep(random.uniform(0.3, 0.8))
+        for ch in password:
+            pass_field.first.type(ch, delay=random.randint(30, 100))
+        time.sleep(random.uniform(0.5, 1.5))
+
+        submit = page.locator('button[type="submit"], button[data-litms-control-urn*="login-submit"]')
+        if submit.count() > 0:
+            submit.first.click()
+        else:
+            pass_field.first.press("Enter")
+        time.sleep(random.uniform(4, 7))
+
+        url_low = (page.url or "").lower()
+        if "challenge" in url_low or "checkpoint" in url_low or "verification" in url_low:
+            print(
+                "linkedin_auto_login: 2FA/verification required — manual login needed",
+                file=sys.stderr,
+            )
+            return False
+
+        if _page_looks_logged_in(page):
+            _human_browse_feed(page)
+            print("linkedin_auto_login: login successful", file=sys.stderr)
+            return True
+
+        page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30_000)
+        time.sleep(3)
+        if _page_looks_logged_in(page):
+            print("linkedin_auto_login: login successful (redirect)", file=sys.stderr)
+            return True
+
+        print(
+            f"linkedin_auto_login: login failed (url={page.url})",
+            file=sys.stderr,
+        )
+        return False
+    except Exception as exc:
+        print(f"linkedin_auto_login: error: {exc}", file=sys.stderr)
+        return False
+    finally:
+        _safe_close(context, pw)
+
+
+def ensure_linkedin_session(cfg: Dict[str, Any], *, headless: bool = True) -> bool:
+    """Check session, try keepalive, then auto-login if needed.
+
+    Returns True if LinkedIn is accessible after recovery attempts.
+    """
+    if linkedin_session_ready(cfg, headless=headless):
+        return True
+    print("LinkedIn session expired — attempting keepalive...", file=sys.stderr)
+    if linkedin_keepalive(cfg, headless=headless):
+        print("LinkedIn session restored via keepalive", file=sys.stderr)
+        return True
+    print("Keepalive failed — attempting auto-login...", file=sys.stderr)
+    if linkedin_auto_login(cfg, headless=headless):
+        return True
+    _send_linkedin_alert(cfg)
+    return False
+
+
+def _send_linkedin_alert(cfg: Dict[str, Any]) -> None:
+    """Send alert email to admin when LinkedIn login fails."""
+    try:
+        from job_agent.settings import get_setting
+        admin_email = (
+            os.environ.get("ORCHESTRATOR_ADMIN_EMAIL")
+            or get_setting("EMAIL_TO", "GMAIL_RECIPIENT").strip()
+        )
+        if not admin_email:
+            return
+        email_user = get_setting("EMAIL_USER", "GMAIL_EMAIL").strip()
+        email_pass = get_setting("EMAIL_PASS", "GMAIL_PASSWORD").strip()
+        if not email_user or not email_pass:
+            return
+        import smtplib
+        from email.message import EmailMessage
+        msg = EmailMessage()
+        msg["Subject"] = "Job Agent: LinkedIn login required"
+        msg["From"] = email_user
+        msg["To"] = admin_email
+        msg.set_content(
+            "LinkedIn session expired and auto-login failed.\n"
+            "Manual re-login needed:\n\n"
+            "  ssh -X azureuser@VM\n"
+            "  cd ~/apps/devops-job-agent\n"
+            "  python3 run.py --linkedin-login\n"
+        )
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(email_user, email_pass)
+            s.send_message(msg)
+        print(f"LinkedIn alert sent to {admin_email}", file=sys.stderr)
+    except Exception as exc:
+        print(f"Failed to send LinkedIn alert: {exc}", file=sys.stderr)
 
 
 def open_linkedin_login(cfg: Dict[str, Any], *, wait_minutes: int = 10) -> bool:

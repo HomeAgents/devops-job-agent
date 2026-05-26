@@ -16,7 +16,7 @@ def _jittered_sleep(base: float, jitter_fraction: float = 0.3) -> None:
     delta = base * jitter_fraction
     time.sleep(base + random.uniform(-delta, delta))
 
-from job_agent.browser.session import open_linkedin_login, playwright_available, with_linkedin_context
+from job_agent.browser.session import ensure_linkedin_session, open_linkedin_login, playwright_available, with_linkedin_context
 from job_agent.models import Job
 from job_agent.network import (
     REACH_OUT_LINKEDIN_SOURCE,
@@ -932,6 +932,10 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
         )
         return []
 
+    if not ensure_linkedin_session(cfg):
+        print("LinkedIn browser: session recovery failed — skipping", file=sys.stderr)
+        return []
+
     js = _jobs_search_block(cfg)
     max_pages = max(1, int(js.get("max_pages") or 3))
     scroll_pause = float(js.get("scroll_pause_seconds") or 1.5)
@@ -964,7 +968,7 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
             )
         ):
             print(
-                "LinkedIn browser: not logged in (auth wall). Run: python3 run.py --linkedin-login",
+                "LinkedIn browser: not logged in (auth wall after recovery). Run: python3 run.py --linkedin-login",
                 file=sys.stderr,
             )
             return []
