@@ -292,16 +292,12 @@ def build_set_status_url(link: str, status: str, cfg: Dict[str, Any]) -> str:
 
 
 def _html_page(title: str, body: str, *, status: int = 200, cfg: Optional[Dict[str, Any]] = None) -> bytes:
-    if cfg and digest_remove_enabled(cfg):
-        hint = f"Job Agent — action links are served from {html.escape(remove_base_url(cfg))}."
-    else:
-        hint = "Job Agent — action links must reach your job-agent remove server (see digest_remove.base_url in config)."
     page = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{title}</title></head>
 <body style="font-family:sans-serif;max-width:42em;margin:2em auto;line-height:1.5;">
 <h1>{title}</h1>
 {body}
-<p style="color:#666;font-size:13px;">{hint}</p>
+<p style="color:#999;font-size:12px;">Job Agent</p>
 </body></html>"""
     return page.encode("utf-8")
 
@@ -343,25 +339,22 @@ def _apply_remove(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
                 job_snapshot=job_snapshot_from_removed_record(snapshot),
             )
             tracker_note = (
-                f"<p>Status set to <strong>{html.escape(removed_status_label(cfg))}</strong> in "
-                f"<code>{html.escape(str(default_job_tracker_path(root, cfg)))}</code> "
-                f"(matched by link or title+company on future digests).</p>"
+                f"<p style=\"font-size:13px;color:#666;\">Status updated to "
+                f"<strong>{html.escape(removed_status_label(cfg))}</strong>.</p>"
             )
-        except ValueError as exc:
-            tracker_note = f"<p>Tracker update failed: {html.escape(str(exc))}</p>"
+        except ValueError:
+            tracker_note = ""
     if added:
         return (
             True,
             f"<p><strong>Removed.</strong> «{html.escape(str(title))}» will not appear in "
-            f"<strong>Jobs in this digest</strong> on future emails.</p>"
-            f"<p style=\"font-size:13px;color:#444;\">Saved to hide list"
-            f"{f'; cleared {deleted} row(s) from jobs.db' if deleted else ''}.</p>"
+            f"future digest emails.</p>"
             f"{tracker_note}",
         )
     return (
         False,
-        f"<p><strong>Already on hide list.</strong> «{html.escape(str(title))}» was already removed."
-        f"{f' Refreshed snapshot; cleared {deleted} row(s) from jobs.db.' if deleted else ''}</p>"
+        f"<p><strong>Already removed.</strong> «{html.escape(str(title))}» was already hidden "
+        f"from future digests.</p>"
         f"{tracker_note}",
     )
 
@@ -415,9 +408,8 @@ def _apply_set_status(link: str, status: str, cfg: Dict[str, Any]) -> Tuple[bool
         return False, f"<p>{html.escape(str(exc))}</p>"
     path = default_job_tracker_path(root, cfg)
     tracker_msg = (
-        f"<p><strong>Status updated.</strong> Set to <strong>{html.escape(canonical)}</strong>. "
-        f"<strong>Last updated</strong> refreshed to now.</p>"
-        f"<p>Saved in <code>{html.escape(str(path))}</code> — the next digest reads this file.</p>"
+        f"<p><strong>Status updated.</strong> Set to <strong>{html.escape(canonical)}</strong>.</p>"
+        f"<p style=\"font-size:13px;color:#666;\">This will be reflected in your next digest email.</p>"
     )
     return True, tracker_msg
 
@@ -445,10 +437,9 @@ def _apply_mark_applied(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
     when = record_job_apply(link, snapshot, cfg, root=_project_root(cfg))
     title = snapshot.get("Job Title") or link
     return True, (
-        f"<p><strong>Marked applied.</strong> «{title}» — Last updated set to "
-        f"<strong>{when}</strong>, Status <strong>In Progress</strong>.</p>"
-        f"<p>Saved in <code>job_tracker.xlsx</code> (Last updated + Status). "
-        "Next digest will show both.</p>"
+        f"<p><strong>Marked applied.</strong> «{html.escape(str(title))}» — Status set to "
+        f"<strong>In Progress</strong>.</p>"
+        f"<p style=\"font-size:13px;color:#666;\">This will be reflected in your next digest email.</p>"
     )
 
 
@@ -542,14 +533,10 @@ class _RemoveHandler(BaseHTTPRequestHandler):
             users = 0
             if orchestrator_users_root().is_dir():
                 users = sum(1 for d in orchestrator_users_root().iterdir() if d.is_dir())
-            multi = f"<p>Multi-user: {users} profile(s) under <code>{html.escape(str(orchestrator_users_root()))}</code>.</p>" if users else ""
             self._send_html(
                 200,
                 "OK",
-                "<p>Remove / restore / apply server is running.</p>"
-                "<p>Routes: <code>/remove</code>, <code>/restore</code>, <code>/apply</code>, "
-                "<code>/status</code></p>"
-                f"{multi}",
+                "<p>Job Agent action server is running.</p>",
             )
             return
         qs = parse_qs(parsed.query)
@@ -567,7 +554,7 @@ class _RemoveHandler(BaseHTTPRequestHandler):
                 self._send_html(400, "Could not remove", "<p>Missing job link.</p>")
                 return
             _, msg = _apply_remove(link, cfg)
-            self._send_html(200, "Job hidden", f"{msg}<p style=\"word-break:break-all;font-size:13px;\">{link}</p>")
+            self._send_html(200, "Job hidden", msg)
             return
         if route == "/restore":
             cfg, payload, err = resolve_cfg_for_token(token, self.cfg)
@@ -582,7 +569,7 @@ class _RemoveHandler(BaseHTTPRequestHandler):
                 self._send_html(400, "Could not restore", "<p>Missing job link.</p>")
                 return
             _, msg = _apply_restore(link, cfg)
-            self._send_html(200, "Job restored", f"{msg}<p style=\"word-break:break-all;font-size:13px;\">{link}</p>")
+            self._send_html(200, "Job restored", msg)
             return
         if route == "/apply":
             cfg, payload, err = resolve_cfg_for_token(token, self.cfg)
@@ -597,7 +584,7 @@ class _RemoveHandler(BaseHTTPRequestHandler):
                 self._send_html(400, "Could not mark applied", "<p>Missing job link.</p>")
                 return
             _, msg = _apply_mark_applied(link, cfg)
-            self._send_html(200, "Marked applied", f"{msg}<p style=\"word-break:break-all;font-size:13px;\">{link}</p>")
+            self._send_html(200, "Marked applied", msg)
             return
         if route == "/status":
             cfg, payload, err = resolve_cfg_for_token(token, self.cfg)
@@ -613,7 +600,7 @@ class _RemoveHandler(BaseHTTPRequestHandler):
                 self._send_html(400, "Could not update status", "<p>Missing job link or status.</p>")
                 return
             _, msg = _apply_set_status(link, status, cfg)
-            self._send_html(200, "Status updated", f"{msg}<p style=\"word-break:break-all;font-size:13px;\">{link}</p>")
+            self._send_html(200, "Status updated", msg)
             return
         self._send_html(404, "Not found", "<p>Unknown path.</p>")
 

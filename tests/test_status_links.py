@@ -42,7 +42,7 @@ class StatusLinkTests(unittest.TestCase):
             ok, msg = _apply_set_status(link, "In Progress", cfg)
             self.assertTrue(ok)
             self.assertIn("Status updated", msg)
-            self.assertIn("job_tracker.xlsx", msg)
+            self.assertIn("In Progress", msg)
 
     def test_set_status_token_and_xlsx(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
