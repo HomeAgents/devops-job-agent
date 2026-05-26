@@ -61,6 +61,21 @@ def _launch_persistent(cfg: Dict[str, Any], *, headless: bool, service: str = "l
     user_data.mkdir(parents=True, exist_ok=True)
     slow_mo = int(block.get("slow_mo_ms") or 0)
     pw = sync_playwright().start()
+
+    extra_args = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-infobars",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+    ]
+    extra_from_cfg = block.get("extra_chromium_args")
+    if isinstance(extra_from_cfg, list):
+        extra_args.extend(extra_from_cfg)
+
     context = pw.chromium.launch_persistent_context(
         str(user_data),
         headless=headless,
@@ -68,7 +83,13 @@ def _launch_persistent(cfg: Dict[str, Any], *, headless: bool, service: str = "l
         viewport={"width": 1280, "height": 900},
         locale=(block.get("locale") or "he-IL"),
         user_agent=_pick_user_agent(cfg),
+        args=extra_args,
+        ignore_default_args=["--enable-automation"],
     )
+    # Hide webdriver flag from navigator
+    for page in context.pages:
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    context.on("page", lambda p: p.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"))
     return pw, context
 
 

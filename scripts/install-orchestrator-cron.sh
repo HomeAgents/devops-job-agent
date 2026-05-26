@@ -7,10 +7,12 @@ CRON_TMP=$(mktemp)
 {
   echo "CRON_TZ=Asia/Jerusalem"
   echo "@reboot ${ROOT}/scripts/vm-boot-agents.sh"
+  echo "55 8 * * * ${ROOT}/scripts/linkedin-auto-relogin.sh"
   echo "0 9 * * * ${BIRTHDAY}/scripts/morning-agents.sh"
   echo "15 9 * * * ${BIRTHDAY}/scripts/run-scoutsignal.sh"
   echo "5 9 * * * ${ROOT}/scripts/run-daily-jobs.sh"
   echo "*/5 * * * * ${ROOT}/scripts/poll-inbox.sh"
+  echo "0 */6 * * * ${ROOT}/scripts/linkedin-keepalive.sh"
   echo "0 19 * * * ${BIRTHDAY}/scripts/morning-agents.sh"
   echo "15 19 * * * ${BIRTHDAY}/scripts/run-scoutsignal.sh"
 } > "$CRON_TMP"
