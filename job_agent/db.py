@@ -32,6 +32,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN emailed_at TEXT")
     if "last_seen_at" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN last_seen_at TEXT")
+    if "description" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN description TEXT")
     # Legacy link-only rows: treat as already emailed so they are not bulk-sent once.
     conn.execute(
         "UPDATE jobs SET emailed_at = COALESCE(emailed_at, ?) WHERE payload IS NULL",
@@ -235,3 +237,21 @@ def delete_jobs_for_posting(conn: sqlite3.Connection, link: str) -> int:
 def filter_new_links(conn: sqlite3.Connection, links: list[str]) -> list[str]:
     have = existing_links(conn)
     return [ln for ln in links if ln and ln not in have]
+
+
+def get_cached_description(conn: sqlite3.Connection, link: str) -> Optional[str]:
+    key = normalize_url((link or "").strip())
+    if not key:
+        return None
+    row = conn.execute("SELECT description FROM jobs WHERE link = ?", (key,)).fetchone()
+    if row and row[0]:
+        return str(row[0])
+    return None
+
+
+def cache_description(conn: sqlite3.Connection, link: str, text: str) -> None:
+    key = normalize_url((link or "").strip())
+    if not key or not text:
+        return
+    conn.execute("UPDATE jobs SET description = ? WHERE link = ?", (text, key))
+    conn.commit()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
@@ -9,7 +10,7 @@ from typing import Any, Optional
 from orchestrator.user_db import UserDB
 
 
-_ADMIN_EMAIL = "arkadiy.kats@gmail.com"
+_ADMIN_EMAIL = os.getenv("ORCHESTRATOR_ADMIN_EMAIL", "arkadiy.kats@gmail.com")
 
 _ACTION_SHORT = {
     "welcome": "Welcome",

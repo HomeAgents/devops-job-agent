@@ -268,8 +268,8 @@ def _df_to_html_table(
             s = "" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
             if c == "Link" and s.startswith("http"):
                 cells.append(
-                    f"<td{_td_style(color=row_color, extra='word-break:break-all;')}>"
-                    f"{_link_html(s, s, color=row_color)}</td>"
+                    f"<td{_td_style(color=row_color, extra='text-align:center;')}>"
+                    f"{_link_html(s, 'View job', color=row_color)}</td>"
                 )
             elif c == "Network" and s:
                 cells.append(f"<td{_td_style(color=row_color, extra='font-size:13px;')}>{esc(s)}</td>")
@@ -558,6 +558,27 @@ def _build_digest_html(
                 f"{html.escape(note)}</p>"
             )
     only_new = bool(cfg.get("digest_email_only_new", False))
+
+    if table_action != "restore" and not jobs_df.empty:
+        total = len(jobs_df)
+        actual_cv = cv_fit_column_name(cfg)
+        new_count = sum(1 for _, r in jobs_df.iterrows() if str(r.get("Status", "") or "").strip().lower() in ("", "new"))
+        top_match = ""
+        if actual_cv in jobs_df.columns:
+            nums = [int(str(v).replace("%", "")) for v in jobs_df[actual_cv] if str(v).replace("%", "").isdigit()]
+            if nums:
+                top_match = f", top match: {max(nums)}%"
+        summary_parts = [f"<strong>{total}</strong> job(s)"]
+        if new_count < total:
+            summary_parts.append(f"<strong>{new_count}</strong> new")
+        if top_match:
+            summary_parts.append(top_match.lstrip(", "))
+        intro += (
+            '<p style="font-family:sans-serif;font-size:15px;color:#333;margin:8px 0 12px;">'
+            + " &middot; ".join(summary_parts)
+            + "</p>"
+        )
+
     search_block = ""
     if table_action != "restore":
         profile_df = build_search_profile_with_fetch_stats_df(cfg, fetch_stats_df)
@@ -625,8 +646,13 @@ def _build_digest_html(
         network_block = _network_html_table(network_df)
         contacts_block = _contacts_html_table(contacts_df)
     return (
-        "<html><body>"
-        f"{intro}{jobs_block}{removed_block}{search_block}{fetch_block}"
+        '<html><head><meta name="viewport" content="width=device-width,initial-scale=1">'
+        "<style>"
+        "table{max-width:100%;}"
+        ".digest-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}"
+        "</style></head><body>"
+        f'{intro}<div class="digest-wrap">{jobs_block}</div>'
+        f'{removed_block}{search_block}{fetch_block}'
         f"{network_block}{contacts_block}"
         "</body></html>"
     )
@@ -849,6 +875,14 @@ def send_digest_email(
             filename=excel_path.name,
         )
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(email_user, email_pass)
-        smtp.send_message(msg)
+    import time as _time
+    for attempt in range(3):
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+                smtp.login(email_user, email_pass)
+                smtp.send_message(msg)
+            break
+        except smtplib.SMTPException:
+            if attempt == 2:
+                raise
+            _time.sleep(5 * (attempt + 1))

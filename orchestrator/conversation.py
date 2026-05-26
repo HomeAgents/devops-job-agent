@@ -316,6 +316,22 @@ def _classify_admin_intent_regex(body: str) -> Optional[str]:
     return "report"
 
 
+def _wants_pause(text: str) -> bool:
+    t = strip_email_signature(strip_quoted_reply(text)).lower()
+    return any(
+        w in t
+        for w in (
+            "stop", "pause", "unsubscribe", "cancel", "הפסק", "עצור", "בטל",
+            "стоп", "пауза", "отписаться", "отмена",
+        )
+    )
+
+
+def _wants_help(text: str) -> bool:
+    t = strip_email_signature(strip_quoted_reply(text)).strip().lower()
+    return t in ("help", "menu", "?", "עזרה", "תפריט", "помощь", "меню")
+
+
 def _wants_same_data(text: str) -> bool:
     t = _normalized_reply(text).lower()
     full = strip_email_signature(strip_quoted_reply(text)).lower()
@@ -506,126 +522,143 @@ class ConversationEngine:
             replies.extend(self._handle_keyword_approval(user, mail, body, thread_meta))
 
         elif user.state in ("ready", "returning", "scheduled", "report_sent"):
-            llm_intent = None
-            if not _wants_same_data(body) and not _wants_run_search(body) and not _wants_new_data(body):
-                saved_q = user.meta.get("approved_keyword_query") or user.keywords or ""
-                llm_intent = _classify_user_intent(body, saved_q)
-                if llm_intent:
-                    print(f"LLM intent for {user.email}: {llm_intent}", flush=True)
-
-            if _wants_same_data(body) or _wants_run_search(body) or llm_intent == "run_search":
-                q = user.meta.get("approved_keyword_query") or user.keywords
-                ack = self._t(
-                    user,
-                    f"Using your approved keywords. Running search now.\n({q})",
-                    f"משתמשים במילות המפתח שאושרו. מתחיל חיפוש.\n({q})",
-                    f"Используем одобренные ключевые слова. Запускаю поиск.\n({q})",
-                )
-                search_sent = False
-                try:
-                    self._send_thread_reply(user, mail, thread_meta, ack)
-                    search_sent = True
-                except Exception as exc:
-                    print(
-                        f"Failed to send reply to {mail.from_email} subject={mail.subject!r}: {exc}",
-                        flush=True,
-                    )
-                self.db.log_conversation(
-                    direction="outbound",
-                    user_email=mail.from_email,
-                    subject=mail.subject,
-                    body_snippet=ack[:200],
-                    action="run_search",
-                    state_before=state_before,
-                    state_after="running",
-                    message_id=None,
-                )
-                if search_sent:
-                    self.db.mark_replied(mail.message_id)
-                self.db.update_user(user.id, state="running", keywords=q)
-                user = self.db.get_or_create(mail.from_email)
-                self._run_job(user)
-                return []
-            elif _wants_new_data(body) or llm_intent == "new_data":
-                meta = dict(user.meta)
-                meta.pop("keyword_proposals", None)
-                meta.pop("approved_keyword_query", None)
-                self.db.update_user(user.id, state="collecting", cv_path=None, keywords=None, meta=meta)
+            if _wants_pause(body):
+                self.db.update_user(user.id, schedule_days=[], state="returning")
                 replies.append(
                     self._t(
                         user,
-                        "Send new keywords and/or attach a new CV.\nSay 'replace' to overwrite saved data.",
-                        "שלחו מילות מפתח חדשות ו/או קורות חיים.\nכתבו 'replace' או 'החלף' לדריסה.",
-                        "Пришлите новые ключевые слова и/или резюме.\nНапишите replace для замены данных.",
+                        "Paused. You will not receive scheduled reports.\n"
+                        "Reply anytime with 1 for a one-time search, or set a new schedule.",
+                        "הושהה. לא תקבלו דוחות מתוזמנים.\n"
+                        "השיבו 1 לחיפוש חד-פעמי, או הגדירו לוח זמנים חדש.",
+                        "Приостановлено. Вы не будете получать запланированные отчёты.\n"
+                        "Ответьте 1 для разового поиска или задайте новое расписание.",
                     )
                 )
-            elif user.state == "scheduled" and parse_schedule_days(body):
-                days = parse_schedule_days(body)
-                self.db.update_user(user.id, schedule_days=days, state="scheduled")
-                replies.append(
-                    self._t(
-                        user,
-                        f"Schedule updated: days {days} at {user.schedule_time} ({user.timezone}).",
-                        f"לוח זמנים עודכן: ימים {days} בשעה {user.schedule_time} ({user.timezone}).",
-                        f"Расписание обновлено: дни {days} в {user.schedule_time} ({user.timezone}).",
-                    )
-                )
-            elif (days := parse_schedule_days(body)):
-                self.db.update_user(user.id, schedule_days=days, state="scheduled")
-                replies.append(
-                    self._t(
-                        user,
-                        f"Schedule saved: days {days} at {user.schedule_time} ({user.timezone}).\n"
-                        "Reply 1 anytime for a search with your saved keywords.",
-                        f"לוח זמנים נשמר: ימים {days} בשעה {user.schedule_time} ({user.timezone}).\n"
-                        "השיבו 1 בכל עת לחיפוש עם מילות המפתח השמורות.",
-                        f"Расписание сохранено: дни {days} в {user.schedule_time} ({user.timezone}).\n"
-                        "Ответьте 1 для поиска с сохранёнными ключевыми словами.",
-                    )
-                )
-            elif cv_path or keywords:
-                updates: dict[str, Any] = {}
-                if cv_path:
-                    updates["cv_path"] = cv_path
-                if keywords:
-                    updates["keywords"] = clean_keywords_input(keywords)
-                if updates:
-                    self.db.update_user(user.id, **updates)
-                    user = self.db.get_or_create(mail.from_email)
-                if user.cv_path and (keywords or user.keywords):
-                    replies.append(self._begin_keyword_review(user))
-                else:
-                    replies.append(
-                        self._t(
-                            user,
-                            "Send keywords and CV, then we will prepare a phrase list for your approval.",
-                            "שלחו מילות מפתח וקורות חיים, ואז נכין רשימת ניסוחים לאישור.",
-                            "Пришлите ключевые слова и резюме — подготовим список фраз на одобрение.",
-                        )
-                    )
-            elif _wants_job_help(body):
+            elif _wants_help(body):
                 q = user.meta.get("approved_keyword_query") or user.keywords or "(none)"
                 replies.append(
                     self._t(
                         user,
-                        f"Welcome back. Last approved search: {q}.\n"
-                        "Reply 1 = same search · 2 = new CV/keywords · or send schedule (weekdays/daily).",
-                        f"שלום שוב. חיפוש אחרון שאושר: {q}.\n"
-                        "השיבו 1 = אותו חיפוש · 2 = נתונים חדשים · או שלחו לוח זמנים.",
-                        f"Снова здравствуйте. Последний одобренный поиск: {q}.\n"
-                        "Ответьте 1 = тот же поиск · 2 = новые данные · или расписание.",
+                        f"Your saved search: {q}\n\n"
+                        "Commands:\n"
+                        "  1 — run search with saved keywords\n"
+                        "  2 — send new CV / keywords\n"
+                        "  daily / weekdays / sun,tue,thu — set schedule\n"
+                        "  stop / pause — pause scheduled reports\n"
+                        "  help — show this menu",
+                        f"חיפוש שמור: {q}\n\n"
+                        "פקודות:\n"
+                        "  1 — חיפוש עם מילות מפתח שמורות\n"
+                        "  2 — שליחת קו״ח / מילות מפתח חדשות\n"
+                        "  daily / weekdays / sun,tue,thu — הגדרת לוח זמנים\n"
+                        "  stop / pause — השהיית דוחות\n"
+                        "  help — תפריט זה",
+                        f"Сохранённый поиск: {q}\n\n"
+                        "Команды:\n"
+                        "  1 — поиск по сохранённым словам\n"
+                        "  2 — новые данные / резюме\n"
+                        "  daily / weekdays / sun,tue,thu — расписание\n"
+                        "  stop / pause — приостановить\n"
+                        "  help — это меню",
                     )
                 )
-                self.db.update_user(user.id, state="returning")
             else:
-                replies.append(
-                    self._t(
+                llm_intent = None
+                if not _wants_same_data(body) and not _wants_run_search(body) and not _wants_new_data(body):
+                    saved_q = user.meta.get("approved_keyword_query") or user.keywords or ""
+                    llm_intent = _classify_user_intent(body, saved_q)
+                    if llm_intent:
+                        print(f"LLM intent for {user.email}: {llm_intent}", flush=True)
+
+                if _wants_same_data(body) or _wants_run_search(body) or llm_intent == "run_search":
+                    q = user.meta.get("approved_keyword_query") or user.keywords
+                    ack = self._t(
                         user,
-                        "Reply 1 for saved search, 2 for new data, or describe days for schedule.",
-                        "השיבו 1 לחיפוש שמור, 2 לנתונים חדשים, או ציינו ימים ללוח זמנים.",
-                        "Ответьте 1 — сохранённый поиск, 2 — новые данные, или укажите дни расписания.",
+                        f"Using your approved keywords. Running search now.\n({q})",
+                        f"\u05de\u05e9\u05ea\u05de\u05e9\u05d9\u05dd \u05d1\u05de\u05d9\u05dc\u05d5\u05ea \u05d4\u05de\u05e4\u05ea\u05d7 \u05e9\u05d0\u05d5\u05e9\u05e8\u05d5. \u05de\u05ea\u05d7\u05d9\u05dc \u05d7\u05d9\u05e4\u05d5\u05e9.\n({q})",
+                        f"\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u043c \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u043d\u044b\u0435 \u043a\u043b\u044e\u0447\u0435\u0432\u044b\u0435 \u0441\u043b\u043e\u0432\u0430. \u0417\u0430\u043f\u0443\u0441\u043a\u0430\u044e \u043f\u043e\u0438\u0441\u043a.\n({q})",
                     )
-                )
+                    search_sent = False
+                    try:
+                        self._send_thread_reply(user, mail, thread_meta, ack)
+                        search_sent = True
+                    except Exception as exc:
+                        print(
+                            f"Failed to send reply to {mail.from_email} subject={mail.subject!r}: {exc}",
+                            flush=True,
+                        )
+                    self.db.log_conversation(
+                        direction="outbound",
+                        user_email=mail.from_email,
+                        subject=mail.subject,
+                        body_snippet=ack[:200],
+                        action="run_search",
+                        state_before=state_before,
+                        state_after="running",
+                        message_id=None,
+                    )
+                    if search_sent:
+                        self.db.mark_replied(mail.message_id)
+                    self.db.update_user(user.id, state="running", keywords=q)
+                    user = self.db.get_or_create(mail.from_email)
+                    self._run_job(user)
+                    return []
+                elif _wants_new_data(body) or llm_intent == "new_data":
+                    meta = dict(user.meta)
+                    meta.pop("keyword_proposals", None)
+                    meta.pop("approved_keyword_query", None)
+                    self.db.update_user(user.id, state="collecting", cv_path=None, keywords=None, meta=meta)
+                    replies.append(
+                        self._t(
+                            user,
+                            "Send new keywords and/or attach a new CV.\nSay 'replace' to overwrite saved data.",
+                            "\u05e9\u05dc\u05d7\u05d5 \u05de\u05d9\u05dc\u05d5\u05ea \u05de\u05e4\u05ea\u05d7 \u05d7\u05d3\u05e9\u05d5\u05ea \u05d5/\u05d0\u05d5 \u05e7\u05d5\u05e8\u05d5\u05ea \u05d7\u05d9\u05d9\u05dd.\n\u05db\u05ea\u05d1\u05d5 'replace' \u05d0\u05d5 '\u05d4\u05d7\u05dc\u05e3' \u05dc\u05d3\u05e8\u05d9\u05e1\u05d4.",
+                            "\u041f\u0440\u0438\u0448\u043b\u0438\u0442\u0435 \u043d\u043e\u0432\u044b\u0435 \u043a\u043b\u044e\u0447\u0435\u0432\u044b\u0435 \u0441\u043b\u043e\u0432\u0430 \u0438/\u0438\u043b\u0438 \u0440\u0435\u0437\u044e\u043c\u0435.\n\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 replace \u0434\u043b\u044f \u0437\u0430\u043c\u0435\u043d\u044b \u0434\u0430\u043d\u043d\u044b\u0445.",
+                        )
+                    )
+                elif cv_path or keywords:
+                    updates: dict[str, Any] = {}
+                    if cv_path:
+                        updates["cv_path"] = cv_path
+                    if keywords:
+                        updates["keywords"] = clean_keywords_input(keywords)
+                    if updates:
+                        self.db.update_user(user.id, **updates)
+                        user = self.db.get_or_create(mail.from_email)
+                    if user.cv_path and (keywords or user.keywords):
+                        replies.append(self._begin_keyword_review(user))
+                    else:
+                        replies.append(
+                            self._t(
+                                user,
+                                "Send keywords and CV, then we will prepare a phrase list for your approval.",
+                                "\u05e9\u05dc\u05d7\u05d5 \u05de\u05d9\u05dc\u05d5\u05ea \u05de\u05e4\u05ea\u05d7 \u05d5\u05e7\u05d5\u05e8\u05d5\u05ea \u05d7\u05d9\u05d9\u05dd, \u05d5\u05d0\u05d6 \u05e0\u05db\u05d9\u05df \u05e8\u05e9\u05d9\u05de\u05ea \u05e0\u05d9\u05e1\u05d5\u05d7\u05d9\u05dd \u05dc\u05d0\u05d9\u05e9\u05d5\u05e8.",
+                                "\u041f\u0440\u0438\u0448\u043b\u0438\u0442\u0435 \u043a\u043b\u044e\u0447\u0435\u0432\u044b\u0435 \u0441\u043b\u043e\u0432\u0430 \u0438 \u0440\u0435\u0437\u044e\u043c\u0435 \u2014 \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u043c \u0441\u043f\u0438\u0441\u043e\u043a \u0444\u0440\u0430\u0437 \u043d\u0430 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u0435.",
+                            )
+                        )
+                elif (days := parse_schedule_days(body)):
+                    self.db.update_user(user.id, schedule_days=days, state="scheduled")
+                    replies.append(
+                        self._t(
+                            user,
+                            f"Schedule saved: days {days} at {user.schedule_time} ({user.timezone}).\n"
+                            "Reply 1 anytime for a search with your saved keywords.",
+                            f"\u05dc\u05d5\u05d7 \u05d6\u05de\u05e0\u05d9\u05dd \u05e0\u05e9\u05de\u05e8: \u05d9\u05de\u05d9\u05dd {days} \u05d1\u05e9\u05e2\u05d4 {user.schedule_time} ({user.timezone}).\n"
+                            "\u05d4\u05e9\u05d9\u05d1\u05d5 1 \u05d1\u05db\u05dc \u05e2\u05ea \u05dc\u05d7\u05d9\u05e4\u05d5\u05e9 \u05e2\u05dd \u05de\u05d9\u05dc\u05d5\u05ea \u05d4\u05de\u05e4\u05ea\u05d7 \u05d4\u05e9\u05de\u05d5\u05e8\u05d5\u05ea.",
+                            f"\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e: \u0434\u043d\u0438 {days} \u0432 {user.schedule_time} ({user.timezone}).\n"
+                            "\u041e\u0442\u0432\u0435\u0442\u044c\u0442\u0435 1 \u0434\u043b\u044f \u043f\u043e\u0438\u0441\u043a\u0430 \u0441 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u043c\u0438 \u043a\u043b\u044e\u0447\u0435\u0432\u044b\u043c\u0438 \u0441\u043b\u043e\u0432\u0430\u043c\u0438.",
+                        )
+                    )
+                else:
+                    replies.append(
+                        self._t(
+                            user,
+                            "Reply 1 for saved search, 2 for new data, or describe days for schedule.",
+                            "\u05d4\u05e9\u05d9\u05d1\u05d5 1 \u05dc\u05d7\u05d9\u05e4\u05d5\u05e9 \u05e9\u05de\u05d5\u05e8, 2 \u05dc\u05e0\u05ea\u05d5\u05e0\u05d9\u05dd \u05d7\u05d3\u05e9\u05d9\u05dd, \u05d0\u05d5 \u05e6\u05d9\u05d9\u05e0\u05d5 \u05d9\u05de\u05d9\u05dd \u05dc\u05dc\u05d5\u05d7 \u05d6\u05de\u05e0\u05d9\u05dd.",
+                            "\u041e\u0442\u0432\u0435\u0442\u044c\u0442\u0435 1 \u2014 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0439 \u043f\u043e\u0438\u0441\u043a, 2 \u2014 \u043d\u043e\u0432\u044b\u0435 \u0434\u0430\u043d\u043d\u044b\u0435, \u0438\u043b\u0438 \u0443\u043a\u0430\u0436\u0438\u0442\u0435 \u0434\u043d\u0438 \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u044f.",
+                        )
+                    )
 
         elif user.state == "feedback":
             t = body.lower()

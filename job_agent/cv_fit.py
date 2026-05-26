@@ -152,11 +152,17 @@ def _terms_in_text(terms: List[str], text: str) -> Set[str]:
     return found
 
 
-def job_description_text(job: Job, cfg: Dict[str, Any]) -> str:
-    """Best-effort job description body for fit scoring."""
+def job_description_text(job: Job, cfg: Dict[str, Any], *, db_conn=None) -> str:
+    """Best-effort job description body for fit scoring. Uses DB cache when available."""
     block = cfg.get("cv_fit") if isinstance(cfg.get("cv_fit"), dict) else {}
     min_chars = int(block.get("min_job_text_chars") or _DEFAULT_MIN_JOB_CHARS)
     max_chars = int(block.get("max_job_text_chars") or _MAX_JOB_CHARS)
+
+    if db_conn and job.link:
+        from job_agent.db import get_cached_description
+        cached = get_cached_description(db_conn, job.link)
+        if cached and len(cached) >= min_chars:
+            return cached[:max_chars]
 
     parts = [job.title, job.company, job.location]
     raw = job.raw if isinstance(job.raw, dict) else {}
@@ -201,7 +207,14 @@ def job_description_text(job: Job, cfg: Dict[str, Any]) -> str:
     combined = re.sub(r"\s+", " ", combined).strip()
     if len(combined) < min_chars:
         return ""
-    return combined[:max_chars]
+    result = combined[:max_chars]
+    if db_conn and job.link and result:
+        try:
+            from job_agent.db import cache_description
+            cache_description(db_conn, job.link, result)
+        except Exception:
+            pass
+    return result
 
 
 def compute_cv_fit_percent(cv_text: str, job: Job, cfg: Dict[str, Any]) -> Optional[int]:
