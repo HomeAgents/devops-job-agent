@@ -97,6 +97,14 @@ def fetch_greenhouse(boards: List[str], cfg: Dict[str, Any]) -> List[Job]:
             updated = str(job.get("updated_at", "") or "").strip()
             posted = updated if updated else "recent"
             desc_text = strip_html(str(job.get("content", "") or ""))
+            if not desc_text and job.get("id"):
+                try:
+                    jr = requests.get(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{job['id']}", timeout=20)
+                    if jr.status_code == 200:
+                        jdata = jr.json()
+                        desc_text = strip_html(str(jdata.get("content", "") or ""))
+                except (requests.RequestException, ValueError):
+                    pass
             out.append(
                 Job(
                     source=f"greenhouse:{board}",

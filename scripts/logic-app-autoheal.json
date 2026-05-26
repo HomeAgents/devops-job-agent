@@ -1,0 +1,127 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "Recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Minute",
+          "interval": 15
+        }
+      }
+    },
+    "actions": {
+      "Check_Function_App_State": {
+        "type": "Http",
+        "inputs": {
+          "method": "GET",
+          "uri": "https://management.azure.com/subscriptions/40f9da3f-642b-4815-9af4-4556e9114038/resourceGroups/rg-home-agents/providers/Microsoft.Web/sites/func-email-wake-home-agents?api-version=2023-01-01",
+          "authentication": {
+            "type": "ManagedServiceIdentity",
+            "identity": "/subscriptions/40f9da3f-642b-4815-9af4-4556e9114038/resourcegroups/rg-home-agents/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-home-agents",
+            "audience": "https://management.azure.com/"
+          }
+        },
+        "runAfter": {}
+      },
+      "Is_Function_Stopped": {
+        "type": "If",
+        "expression": {
+          "and": [
+            {
+              "not": {
+                "equals": [
+                  "@body('Check_Function_App_State')?['properties']?['state']",
+                  "Running"
+                ]
+              }
+            }
+          ]
+        },
+        "actions": {
+          "Start_Function_App": {
+            "type": "Http",
+            "inputs": {
+              "method": "POST",
+              "uri": "https://management.azure.com/subscriptions/40f9da3f-642b-4815-9af4-4556e9114038/resourceGroups/rg-home-agents/providers/Microsoft.Web/sites/func-email-wake-home-agents/start?api-version=2023-01-01",
+              "authentication": {
+                "type": "ManagedServiceIdentity",
+                "identity": "/subscriptions/40f9da3f-642b-4815-9af4-4556e9114038/resourcegroups/rg-home-agents/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-home-agents",
+                "audience": "https://management.azure.com/"
+              }
+            },
+            "runAfter": {}
+          },
+          "Wait_30_Seconds": {
+            "type": "Wait",
+            "inputs": {
+              "interval": {
+                "count": 30,
+                "unit": "Second"
+              }
+            },
+            "runAfter": {
+              "Start_Function_App": ["Succeeded"]
+            }
+          },
+          "Check_VM_State": {
+            "type": "Http",
+            "inputs": {
+              "method": "GET",
+              "uri": "https://management.azure.com/subscriptions/40f9da3f-642b-4815-9af4-4556e9114038/resourceGroups/rg-home-agents/providers/Microsoft.Compute/virtualMachines/vm-home-agents/instanceView?api-version=2024-03-01",
+              "authentication": {
+                "type": "ManagedServiceIdentity",
+                "identity": "/subscriptions/40f9da3f-642b-4815-9af4-4556e9114038/resourcegroups/rg-home-agents/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-home-agents",
+                "audience": "https://management.azure.com/"
+              }
+            },
+            "runAfter": {
+              "Wait_30_Seconds": ["Succeeded"]
+            }
+          },
+          "Is_VM_Deallocated": {
+            "type": "If",
+            "expression": {
+              "and": [
+                {
+                  "contains": [
+                    "@string(body('Check_VM_State'))",
+                    "deallocated"
+                  ]
+                }
+              ]
+            },
+            "actions": {
+              "Start_VM": {
+                "type": "Http",
+                "inputs": {
+                  "method": "POST",
+                  "uri": "https://management.azure.com/subscriptions/40f9da3f-642b-4815-9af4-4556e9114038/resourceGroups/rg-home-agents/providers/Microsoft.Compute/virtualMachines/vm-home-agents/start?api-version=2024-03-01",
+                  "authentication": {
+                    "type": "ManagedServiceIdentity",
+                    "identity": "/subscriptions/40f9da3f-642b-4815-9af4-4556e9114038/resourcegroups/rg-home-agents/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-home-agents",
+                    "audience": "https://management.azure.com/"
+                  }
+                },
+                "runAfter": {}
+              }
+            },
+            "else": {
+              "actions": {}
+            },
+            "runAfter": {
+              "Check_VM_State": ["Succeeded"]
+            }
+          }
+        },
+        "else": {
+          "actions": {}
+        },
+        "runAfter": {
+          "Check_Function_App_State": ["Succeeded"]
+        }
+      }
+    }
+  }
+}

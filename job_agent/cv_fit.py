@@ -13,7 +13,7 @@ from job_agent.linkedin_og import fetch_linkedin_job_snippet_http, is_linkedin_j
 from job_agent.models import Job
 from job_agent.util import normalize_url, strip_html
 
-CV_FIT_COLUMN = "CV fit %"
+CV_FIT_COLUMN = "Match"
 _DEFAULT_MIN_JOB_CHARS = 100
 _MAX_JOB_CHARS = 12_000
 _MAX_CV_CHARS = 80_000
@@ -169,6 +169,20 @@ def job_description_text(job: Job, cfg: Dict[str, Any]) -> str:
         gh = fetch_greenhouse_job_content_http(job.link)
         if gh:
             parts.append(strip_html(gh))
+    elif (job.source or "").startswith("greenhouse:") and "gh_jid=" in (job.link or ""):
+        import re as _re
+        m = _re.search(r"gh_jid=(\d+)", job.link)
+        board = job.source.split(":", 1)[1] if ":" in job.source else ""
+        if m and board:
+            try:
+                import requests
+                jr = requests.get(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{m.group(1)}", timeout=15)
+                if jr.status_code == 200:
+                    content = strip_html(str(jr.json().get("content") or ""))
+                    if content:
+                        parts.append(content)
+            except Exception:
+                pass
 
     low_link = (job.link or "").lower()
     if "comeet.co" in low_link or "comeet.com" in low_link:

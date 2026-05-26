@@ -4,6 +4,7 @@ from pathlib import Path
 
 from job_agent.cv_fit import (
     compute_cv_fit_percent,
+    cv_fit_column_name,
     enrich_jobs_dataframe_with_cv_fit,
     format_cv_fit,
     job_description_text,
@@ -91,5 +92,6 @@ def test_enrich_dataframe(tmp_path: Path):
     }
     df = pd.DataFrame([job.as_row()])
     out = enrich_jobs_dataframe_with_cv_fit(df, [job], cfg, root=tmp_path)
-    assert out.iloc[0]["CV fit %"] != "NA"
-    assert "%" in str(out.iloc[0]["CV fit %"])
+    col = cv_fit_column_name(cfg)
+    assert out.iloc[0][col] != "NA"
+    assert "%" in str(out.iloc[0][col])

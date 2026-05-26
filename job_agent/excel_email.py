@@ -56,7 +56,7 @@ _DEFAULT_EMAIL_HEADERS: Dict[str, str] = {
     "Link": "Job link / URL",
     "Source": "Source",
     "Location": "Location",
-    CV_FIT_COLUMN: "CV fit",
+    CV_FIT_COLUMN: "Match",
     "Remove": "Remove",
     "Restore": "Restore",
     TRACKER_COL_LAST_UPDATED: "Last updated",
@@ -647,7 +647,7 @@ def _build_digest_plain(
         "",
     ]
     lines += [
-        "Jobs (sorted by CV fit, then company name):",
+        "Jobs (sorted by match score, then company name):",
         "",
     ]
     job_cols = _REMOVED_JOBS_EMAIL_COLUMNS if table_action == "restore" else _EMAIL_JOB_COLUMNS
