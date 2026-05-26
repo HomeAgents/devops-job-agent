@@ -129,8 +129,76 @@ def _wants_run_search(text: str) -> bool:
             "new search",
             "current filter",
             "run jobs",
+            "last data",
+            "last search",
+            "same data",
+            "שלח דוח",
+            "חפש שוב",
+            "הרץ חיפוש",
+            "отправь отчет",
+            "запусти поиск",
         )
     )
+
+
+def _classify_user_intent(text: str, user_keywords: str) -> Optional[str]:
+    """Use LLM to classify returning user intent.
+
+    Returns: "run_search", "new_data", "schedule", or None (unknown).
+    """
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    body = strip_email_signature(strip_quoted_reply(text)).strip()[:400]
+    if not api_key or not body:
+        return None
+    try:
+        import json
+        import urllib.request
+
+        prompt = (
+            "You classify short email messages from a user of a job-search agent.\n"
+            "The user already has an active profile with approved search keywords.\n"
+            f"Their current saved search: {user_keywords}\n\n"
+            "Classify the user's intent:\n"
+            '- "run_search": user wants to run/send/get their job report/digest using existing keywords '
+            "(e.g. 'send me jobs', 'run search with last data', 'generate report', 'search again', "
+            "'use my saved keywords', 'שלח לי דוח', 'חפש שוב')\n"
+            '- "new_data": user wants to change keywords, update CV, or start fresh '
+            "(e.g. 'new search', 'change keywords', 'update my CV', 'different roles')\n"
+            '- "schedule": user wants to set/change schedule '
+            "(e.g. 'daily', 'weekdays', 'sunday and tuesday', 'every day except saturday')\n"
+            '- null: unclear or unrelated\n\n'
+            "The message may be in English, Hebrew, or Russian.\n\n"
+            f"Message: {body}\n\n"
+            'Return ONLY a JSON object: {"intent": "run_search"} or {"intent": "new_data"} '
+            'or {"intent": "schedule"} or {"intent": null}'
+        )
+        req_body = json.dumps(
+            {
+                "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "max_tokens": 30,
+            }
+        ).encode()
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=req_body,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        content = data["choices"][0]["message"]["content"]
+        m = re.search(r"\{.*\}", content, re.S)
+        if not m:
+            return None
+        parsed = json.loads(m.group())
+        intent = parsed.get("intent")
+        if intent in ("run_search", "new_data", "schedule"):
+            return intent
+        return None
+    except Exception:
+        return None
 
 
 def _classify_admin_intent(body: str) -> Optional[str]:
@@ -438,7 +506,14 @@ class ConversationEngine:
             replies.extend(self._handle_keyword_approval(user, mail, body, thread_meta))
 
         elif user.state in ("ready", "returning", "scheduled", "report_sent"):
-            if _wants_same_data(body) or _wants_run_search(body):
+            llm_intent = None
+            if not _wants_same_data(body) and not _wants_run_search(body) and not _wants_new_data(body):
+                saved_q = user.meta.get("approved_keyword_query") or user.keywords or ""
+                llm_intent = _classify_user_intent(body, saved_q)
+                if llm_intent:
+                    print(f"LLM intent for {user.email}: {llm_intent}", flush=True)
+
+            if _wants_same_data(body) or _wants_run_search(body) or llm_intent == "run_search":
                 q = user.meta.get("approved_keyword_query") or user.keywords
                 ack = self._t(
                     user,
@@ -471,7 +546,7 @@ class ConversationEngine:
                 user = self.db.get_or_create(mail.from_email)
                 self._run_job(user)
                 return []
-            elif _wants_new_data(body):
+            elif _wants_new_data(body) or llm_intent == "new_data":
                 meta = dict(user.meta)
                 meta.pop("keyword_proposals", None)
                 meta.pop("approved_keyword_query", None)
