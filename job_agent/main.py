@@ -108,12 +108,33 @@ def parse_sources_arg(raw: str | None) -> Set[str] | None:
     return {x.strip().lower() for x in raw.split(",") if x.strip()}
 
 
+def _keywords_from_config(cfg: Dict[str, Any]) -> str:
+    """Extract a short keyword summary from the linkedin config block."""
+    li = cfg.get("linkedin") if isinstance(cfg.get("linkedin"), dict) else {}
+    raw = li.get("keywords_raw") or li.get("keywords") or ""
+    if isinstance(raw, list):
+        raw = ", ".join(str(k) for k in raw)
+    raw = str(raw).strip()
+    if not raw:
+        return ""
+    parts = [p.strip().strip('"').strip("'") for p in raw.replace(" OR ", ", ").split(",")]
+    parts = [p for p in parts if p and len(p) > 1]
+    return ", ".join(parts[:5])
+
+
 def _digest_subject(cfg: Dict[str, Any], slot: str) -> str | None:
     custom = cfg.get("digest_email_subjects")
     if isinstance(custom, dict) and slot in custom:
         t = str(custom[slot] or "").strip()
         if t:
             return t
+    kw = _keywords_from_config(cfg)
+    loc = (cfg.get("location_hint") or "").strip()
+    loc_tag = f" ({loc})" if loc else ""
+    if kw:
+        if slot == "removed":
+            return f"Removed jobs — {kw}"
+        return f"Job digest{loc_tag} — {kw}"
     if slot == "removed":
         return "Job digest — removed (restore)"
     return None
