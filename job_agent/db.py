@@ -33,7 +33,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     if "last_seen_at" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN last_seen_at TEXT")
     if "description" not in cols:
-        conn.execute("ALTER TABLE jobs ADD COLUMN description TEXT")
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN description TEXT")
+        except sqlite3.OperationalError:
+            pass
     # Legacy link-only rows: treat as already emailed so they are not bulk-sent once.
     conn.execute(
         "UPDATE jobs SET emailed_at = COALESCE(emailed_at, ?) WHERE payload IS NULL",
