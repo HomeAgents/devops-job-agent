@@ -574,9 +574,9 @@ def _build_digest_html(
     else:
         jobs_heading = "New jobs" if only_new else "Jobs in this digest"
     action_col = "Restore" if table_action == "restore" else "Remove"
-    email_cols = list(
-        _REMOVED_JOBS_EMAIL_COLUMNS if table_action == "restore" else _EMAIL_JOB_COLUMNS
-    )
+    actual_cv_col = cv_fit_column_name(cfg)
+    base_cols = _REMOVED_JOBS_EMAIL_COLUMNS if table_action == "restore" else _EMAIL_JOB_COLUMNS
+    email_cols = [actual_cv_col if c == CV_FIT_COLUMN else c for c in base_cols]
     if table_action != "restore" and job_tracker_digest_columns_enabled(cfg):
         email_cols += [c for c in DIGEST_TRACKER_EMAIL_COLUMNS]
     email_cols += [action_col] if digest_remove_enabled(cfg) and table_action else []
@@ -650,8 +650,10 @@ def _build_digest_plain(
         "Jobs (sorted by match score, then company name):",
         "",
     ]
+    actual_cv = cv_fit_column_name(cfg or {})
     job_cols = _REMOVED_JOBS_EMAIL_COLUMNS if table_action == "restore" else _EMAIL_JOB_COLUMNS
-    cols = [c for c in job_cols if c in jobs_df.columns]
+    resolved_cols = [actual_cv if c == CV_FIT_COLUMN else c for c in job_cols]
+    cols = [c for c in resolved_cols if c in jobs_df.columns]
     if table_action != "restore" and job_tracker_digest_columns_enabled(cfg or {}):
         cols += [c for c in DIGEST_TRACKER_EMAIL_COLUMNS if c in jobs_df.columns]
     for _, row in jobs_df.iterrows():
