@@ -382,7 +382,7 @@ def _db_connect(cfg: Dict[str, Any]):
 
 
 def _apply_set_status(link: str, status: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
-    from job_agent.job_tracker_excel import default_job_tracker_path, set_job_tracker_status
+    from job_agent.job_tracker_excel import set_job_tracker_status
 
     root = _project_root(cfg)
     snapshot: Dict[str, Any] = {"Link": link, "link": link}
@@ -404,9 +404,8 @@ def _apply_set_status(link: str, status: str, cfg: Dict[str, Any]) -> Tuple[bool
         conn.close()
     try:
         canonical = set_job_tracker_status(link, status, cfg, root=root, job_snapshot=snapshot)
-    except ValueError as exc:
-        return False, f"<p>{html.escape(str(exc))}</p>"
-    path = default_job_tracker_path(root, cfg)
+    except ValueError:
+        return False, "<p>Could not update status. Please try again.</p>"
     tracker_msg = (
         f"<p><strong>Status updated.</strong> Set to <strong>{html.escape(canonical)}</strong>.</p>"
         f"<p style=\"font-size:13px;color:#666;\">This will be reflected in your next digest email.</p>"
@@ -490,6 +489,8 @@ def _rate_limited(ip: str) -> bool:
 
 class _RemoveHandler(BaseHTTPRequestHandler):
     cfg: Dict[str, Any] = {}
+    server_version = "JobAgent"
+    sys_version = ""
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[digest-remove] {self.address_string()} {fmt % args}", file=sys.stderr)
@@ -499,6 +500,10 @@ class _RemoveHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -521,7 +526,7 @@ class _RemoveHandler(BaseHTTPRequestHandler):
                 self._send_html(
                     500,
                     "Server error",
-                    f"<p>Something went wrong: {html.escape(str(exc))}</p>",
+                    "<p>Something went wrong. Please try again later.</p>",
                 )
             except Exception:
                 pass
@@ -530,14 +535,7 @@ class _RemoveHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         route = self._route_path(parsed)
         if route == "/health":
-            users = 0
-            if orchestrator_users_root().is_dir():
-                users = sum(1 for d in orchestrator_users_root().iterdir() if d.is_dir())
-            self._send_html(
-                200,
-                "OK",
-                "<p>Job Agent action server is running.</p>",
-            )
+            self._send_html(200, "OK", "<p>OK</p>")
             return
         qs = parse_qs(parsed.query)
         token = (qs.get("t") or [""])[0]
