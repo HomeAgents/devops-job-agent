@@ -112,6 +112,18 @@ def cmd_daily(args: argparse.Namespace) -> int:
     now = datetime.now(tz)
     weekday = (now.weekday() + 1) % 7  # Sun=0
     db = _db()
+
+    cleanup_days = int(os.getenv("ORCHESTRATOR_CLEANUP_DAYS", "7"))
+    if cleanup_days > 0:
+        try:
+            from orchestrator.email_client import cleanup_mailbox
+            results = cleanup_mailbox(max_age_days=cleanup_days)
+            total = sum(results.values())
+            if total:
+                print(f"Mailbox cleanup: deleted {total} message(s) older than {cleanup_days} days")
+        except Exception as exc:
+            print(f"Mailbox cleanup failed: {exc}", file=sys.stderr)
+
     users = db.users_due_today(weekday)
     print(f"Daily run {now.isoformat()} weekday={weekday} users={len(users)}")
     max_parallel = int(os.getenv("ORCHESTRATOR_MAX_PARALLEL", "3"))
@@ -159,6 +171,20 @@ def cmd_admin_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cleanup_mailbox(args: argparse.Namespace) -> int:
+    from orchestrator.email_client import cleanup_mailbox
+
+    results = cleanup_mailbox(max_age_days=args.days, dry_run=args.dry_run)
+    total = sum(results.values())
+    if args.dry_run:
+        print(f"Dry run: would delete {total} message(s) total")
+    else:
+        print(f"Deleted {total} message(s) total")
+    for folder, count in results.items():
+        print(f"  {folder}: {count}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Job agent email orchestrator")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -182,6 +208,11 @@ def main(argv: list[str] | None = None) -> int:
     p_report.add_argument("--days", type=int, default=0, help="Limit to last N days (0=all)")
     p_report.add_argument("--user", type=str, default="", help="Filter by user email")
     p_report.set_defaults(func=cmd_admin_report)
+
+    p_clean = sub.add_parser("cleanup-mailbox", help="Delete old emails from Gmail folders")
+    p_clean.add_argument("--days", type=int, default=7, help="Delete emails older than N days (default 7)")
+    p_clean.add_argument("--dry-run", action="store_true", help="Show what would be deleted without deleting")
+    p_clean.set_defaults(func=cmd_cleanup_mailbox)
 
     args = parser.parse_args(argv)
     return args.func(args)

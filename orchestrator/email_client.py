@@ -270,3 +270,57 @@ def fetch_inbound(
             if num in unseen_ids:
                 imap.store(num, "+FLAGS", "\\Seen")
     return mails
+
+
+def cleanup_mailbox(
+    *,
+    max_age_days: int = 7,
+    folders: tuple[str, ...] = ("INBOX", "[Gmail]/Sent Mail", "[Gmail]/Trash"),
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Delete emails older than max_age_days from specified Gmail folders.
+
+    Returns dict mapping folder name to number of messages deleted.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    imap_user, imap_pass = _imap_settings()
+    host = os.getenv("ORCHESTRATOR_IMAP_HOST", "imap.gmail.com")
+    before = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).strftime("%d-%b-%Y")
+    results: dict[str, int] = {}
+
+    with imaplib.IMAP4_SSL(host) as imap:
+        imap.login(imap_user, imap_pass)
+        for folder in folders:
+            try:
+                typ, _ = imap.select(folder)
+                if typ != "OK":
+                    print(f"Cleanup: cannot select {folder}", file=sys.stderr)
+                    results[folder] = 0
+                    continue
+            except imaplib.IMAP4.error as exc:
+                print(f"Cleanup: folder {folder} error: {exc}", file=sys.stderr)
+                results[folder] = 0
+                continue
+
+            typ, data = imap.search(None, f"(BEFORE {before})")
+            if typ != "OK" or not data or not data[0]:
+                results[folder] = 0
+                continue
+
+            msg_ids = data[0].split()
+            if not msg_ids:
+                results[folder] = 0
+                continue
+
+            count = len(msg_ids)
+            if dry_run:
+                print(f"Cleanup dry-run: would delete {count} message(s) from {folder}")
+            else:
+                for msg_id in msg_ids:
+                    imap.store(msg_id, "+FLAGS", "\\Deleted")
+                imap.expunge()
+                print(f"Cleanup: deleted {count} message(s) from {folder}")
+            results[folder] = count
+
+    return results
