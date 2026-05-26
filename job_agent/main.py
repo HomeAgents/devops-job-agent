@@ -114,14 +114,8 @@ def _digest_subject(cfg: Dict[str, Any], slot: str) -> str | None:
         t = str(custom[slot] or "").strip()
         if t:
             return t
-    if slot == "morning":
-        return "DevOps leadership jobs — morning digest (Israel)"
-    if slot == "afternoon":
-        return "DevOps leadership jobs — afternoon digest (Israel)"
-    if slot == "digest":
-        return "DevOps leadership jobs — digest (Israel)"
     if slot == "removed":
-        return "DevOps leadership jobs — removed (restore)"
+        return "Job digest — removed (restore)"
     return None
 
 

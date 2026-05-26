@@ -99,6 +99,17 @@ def build_user_config(user: UserRecord, base_config_path: Path) -> Path:
 
     cfg["digest_min_minutes_between_sends"] = 0
 
+    short_kw = keywords_raw[:80].strip()
+    if short_kw:
+        loc_tag = f" ({location})" if location else ""
+        subj = f"Job digest{loc_tag} — {short_kw}"
+        cfg["digest_email_subjects"] = {
+            "morning": subj,
+            "afternoon": subj,
+            "digest": subj,
+            "removed": f"Removed jobs — {short_kw}",
+        }
+
     cv_path = user.cv_path
     if cv_path and Path(cv_path).exists():
         cv_fit = cfg.setdefault("cv_fit", {})

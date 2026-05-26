@@ -668,8 +668,12 @@ def _build_digest_plain(
     table_action: DigestTableAction | None = "remove",
     removed_jobs_df: Optional[pd.DataFrame] = None,
 ) -> str:
+    plain_title = "Job digest"
+    custom_subjects = (cfg or {}).get("digest_email_subjects")
+    if isinstance(custom_subjects, dict):
+        plain_title = str(custom_subjects.get("digest") or plain_title).strip()
     lines: List[str] = [
-        "DevOps leadership digest",
+        plain_title,
         "",
     ]
     lines += [
@@ -860,7 +864,11 @@ def send_digest_email(
     )
 
     msg = EmailMessage()
-    msg["Subject"] = (subject or "").strip() or "DevOps Manager/Director roles — digest"
+    fallback_subject = "Job digest"
+    custom_subjects = cfg.get("digest_email_subjects")
+    if isinstance(custom_subjects, dict):
+        fallback_subject = str(custom_subjects.get("digest") or fallback_subject).strip()
+    msg["Subject"] = (subject or "").strip() or fallback_subject
     msg["From"] = formataddr((display, email_user))
     msg["To"] = email_to
     msg.set_content(plain)
