@@ -293,9 +293,11 @@ def build_set_status_url(link: str, status: str, cfg: Dict[str, Any]) -> str:
 
 def _html_page(title: str, body: str, *, status: int = 200, cfg: Optional[Dict[str, Any]] = None) -> bytes:
     page = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Job Agent</title></head>
-<body style="font-family:sans-serif;max-width:42em;margin:2em auto;line-height:1.5;">
-{body}
+<html><head><meta charset="utf-8"><title>Job Agent</title>
+<script>window.close();</script>
+</head>
+<body style="font-family:sans-serif;text-align:center;margin-top:30vh;color:#888;">
+<span style="font-size:48px;">&#10003;</span>
 </body></html>"""
     return page.encode("utf-8")
 
