@@ -15,11 +15,8 @@ JOB_ROOT="${HOME}/apps/devops-job-agent"
 ACTIVITY_FILE="${ORCHESTRATOR_ACTIVITY_FILE:-${HOME}/orchestrator-data/last_activity}"
 mkdir -p "$(dirname "$ACTIVITY_FILE")"
 date -u +"%Y-%m-%dT%H:%M:%S+00:00" > "$ACTIVITY_FILE"
-if [[ -x "${JOB_ROOT}/scripts/digest-remove-server.sh" ]]; then
-  if ! pgrep -f "run.py --digest-remove-server" >/dev/null 2>&1; then
-    nohup bash "${JOB_ROOT}/scripts/digest-remove-server.sh" arkadiy.kats@gmail.com \
-      >>"${HOME}/logs/digest-remove-server.log" 2>&1 &
-  fi
+if [[ -x "${JOB_ROOT}/scripts/ensure-digest-remove-server.sh" ]]; then
+  bash "${JOB_ROOT}/scripts/ensure-digest-remove-server.sh" || true
 fi
 
 if systemctl --user is-enabled birthday-copilot.service >/dev/null 2>&1; then

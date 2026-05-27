@@ -14,6 +14,7 @@ from job_agent.digest_guard import record_send, should_skip_send
 from job_agent.contacts import _build_contact_queries, find_contacts
 from job_agent.digest_remove import (
     digest_remove_enabled,
+    digest_remove_server_warning_html,
     ensure_remove_server_running,
     run_remove_server_forever,
 )
@@ -384,10 +385,7 @@ def _send_email_for_jobs(
             )
             digest_note = (
                 (digest_note + " ") if digest_note else ""
-            ) + (
-                "<strong>Remove links need the agent server on this Mac</strong> "
-                "(run <code>python3 run.py --digest-remove-server</code>)."
-            )
+            ) + digest_remove_server_warning_html(cfg)
 
     if table_action != "restore":
         db.mark_emailed(conn, [j.link for j in email_jobs])

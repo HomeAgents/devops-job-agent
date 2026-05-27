@@ -178,6 +178,13 @@ def _finish_job_run(user: UserRecord, db: UserDB, proc: subprocess.CompletedProc
 
 def run_job_for_user(user: UserRecord, db: UserDB, *, dry_run: bool = False) -> int:
     root = project_root()
+    if not dry_run:
+        try:
+            from orchestrator.digest_server import ensure_shared_remove_server
+
+            ensure_shared_remove_server()
+        except Exception as exc:
+            print(f"digest remove server check failed: {exc}", file=sys.stderr)
     base = Path(os.getenv("ORCHESTRATOR_BASE_CONFIG", str(root / "config.json")))
     if not base.exists():
         base = root / "config.browser.example.json"

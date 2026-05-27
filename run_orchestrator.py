@@ -108,6 +108,12 @@ def cmd_poll(args: argparse.Namespace) -> int:
 def cmd_daily(args: argparse.Namespace) -> int:
     ensure_vm_started()
     touch_activity()
+    try:
+        from orchestrator.digest_server import ensure_shared_remove_server
+
+        ensure_shared_remove_server()
+    except Exception as exc:
+        print(f"digest remove server check failed: {exc}", file=sys.stderr)
     tz = ZoneInfo(os.getenv("ORCHESTRATOR_TZ", "Asia/Jerusalem"))
     now = datetime.now(tz)
     weekday = (now.weekday() + 1) % 7  # Sun=0

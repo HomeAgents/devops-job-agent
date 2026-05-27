@@ -116,6 +116,24 @@ def remove_listen_host_port(cfg: Dict[str, Any]) -> Tuple[str, int]:
     return host, port
 
 
+def _local_remove_base_url(cfg: Dict[str, Any]) -> str:
+    """URL to probe the remove server on the machine running the agent."""
+    _, port = remove_listen_host_port(cfg)
+    return f"http://127.0.0.1:{port}"
+
+
+def _diagnostic_remove_base_url(cfg: Dict[str, Any]) -> str:
+    """Base URL for local health checks (not the public link base in emails)."""
+    host, _ = remove_listen_host_port(cfg)
+    if host in ("0.0.0.0", "::"):
+        return _local_remove_base_url(cfg)
+    public = remove_base_url(cfg)
+    if public.startswith("http://127.0.0.1") or public.startswith("http://localhost"):
+        return public
+    # Server may listen on 0.0.0.0 while emails use the VM public IP.
+    return _local_remove_base_url(cfg)
+
+
 def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode().rstrip("=")
 
@@ -595,6 +613,8 @@ class _RemoveHandler(BaseHTTPRequestHandler):
 
 def _health_check(cfg: Dict[str, Any], timeout: float = 0.6) -> bool:
     host, port = remove_listen_host_port(cfg)
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
@@ -607,8 +627,9 @@ def _server_has_tracker_routes(cfg: Dict[str, Any], timeout: float = 0.8) -> boo
     import urllib.error
     import urllib.request
 
+    base = _diagnostic_remove_base_url(cfg)
     for path in ("/apply", "/status"):
-        url = f"{remove_base_url(cfg)}{path}"
+        url = f"{base}{path}"
         try:
             with urllib.request.urlopen(url, timeout=timeout) as resp:
                 if resp.status >= 500:
@@ -620,6 +641,21 @@ def _server_has_tracker_routes(cfg: Dict[str, Any], timeout: float = 0.8) -> boo
         except OSError:
             return False
     return True
+
+
+def digest_remove_server_warning_html(cfg: Dict[str, Any]) -> str:
+    """HTML note when remove/status links could not be verified before send."""
+    base = remove_base_url(cfg)
+    if base.startswith("http://127.0.0.1") or base.startswith("http://localhost"):
+        return (
+            "<strong>Remove links need the agent server running</strong> "
+            "(run <code>python3 run.py --digest-remove-server</code> on the machine that sends digests)."
+        )
+    return (
+        "<strong>Remove / Status links were unavailable when this email was sent</strong> "
+        f"(action server <code>{html.escape(base)}</code> did not respond). "
+        "They should work once the VM agent is running."
+    )
 
 
 def start_remove_server(cfg: Dict[str, Any], *, background: bool = True) -> ThreadingHTTPServer:
