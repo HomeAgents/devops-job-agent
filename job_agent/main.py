@@ -257,6 +257,9 @@ def _send_email_for_jobs(
         )
 
     if table_action != "restore" and not args.dry_run and not args.skip_network and uses_browser_search(cfg):
+        from job_agent.linkedin_home_sync import apply_fast_vm_overrides_when_home_sync_fresh
+
+        reach_cfg = apply_fast_vm_overrides_when_home_sync_fresh(cfg)
         if conn is not None:
             from job_agent.network import hydrate_reach_out_from_db
 
@@ -270,7 +273,7 @@ def _send_email_for_jobs(
             n = hydrate_reach_out_from_db(email_jobs, stored_by_link)
             if n:
                 print(f"Reach-out: hydrated {n} job(s) from jobs.db before scrape.", file=sys.stderr)
-        enrich_reach_out_for_jobs(email_jobs, cfg, for_email=True)
+        enrich_reach_out_for_jobs(email_jobs, reach_cfg, for_email=True)
         if conn is not None:
             db.upsert_jobs(conn, email_jobs, mark_emailed=False)
 
@@ -458,6 +461,9 @@ def _strip_disabled_serpapi_sources(cfg: Dict[str, Any], only: Set[str]) -> Set[
 
 def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[List[Job], List[Dict[str, Any]]]:
     """Fetch from all enabled sources; return jobs and one stats row per site/feed queried."""
+    from job_agent.linkedin_home_sync import apply_fast_vm_overrides_when_home_sync_fresh
+
+    cfg = apply_fast_vm_overrides_when_home_sync_fresh(cfg)
     jobs: List[Job] = []
     seen: Set[str] = set()
     stats: List[Dict[str, Any]] = []
@@ -484,7 +490,16 @@ def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[
     if uses_browser_search(cfg):
         li = cfg.get("linkedin")
         li_on = isinstance(li, dict) and li.get("enabled", True)
-        if li_on and (only is None or "linkedin" in only or "linkedin_browser" in only):
+        skip_vm_linkedin = False
+        if li_on:
+            from job_agent.linkedin_home_sync import resolve_linkedin_home_sync
+
+            home_jobs, home_msg, skip_vm_linkedin = resolve_linkedin_home_sync(cfg)
+            if home_jobs:
+                add_many(home_jobs, "LinkedIn (home sync)")
+                if home_msg:
+                    print(home_msg, file=sys.stderr)
+        if li_on and not skip_vm_linkedin and (only is None or "linkedin" in only or "linkedin_browser" in only):
             _err = ""
             try:
                 batch = fetch_linkedin_jobs(cfg)
@@ -493,7 +508,7 @@ def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[
                 batch = []
                 _err = str(exc)
             add_many(batch, "LinkedIn (browser)", error=_err)
-        if li_on and (only is None or "linkedin" in only or "linkedin_posts" in only):
+        if li_on and not skip_vm_linkedin and (only is None or "linkedin" in only or "linkedin_posts" in only):
             _err = ""
             try:
                 batch = fetch_linkedin_posts(cfg)
@@ -784,6 +799,17 @@ def run(argv: List[str] | None = None) -> int:
         action="store_true",
         help="Run LinkedIn Jobs fetch with a visible browser (debugging; same session profile)",
     )
+    parser.add_argument(
+        "--linkedin-home-export",
+        action="store_true",
+        help="Fetch LinkedIn jobs/posts locally and write JSON for home→VM sync (residential IP).",
+    )
+    parser.add_argument(
+        "--linkedin-home-export-path",
+        type=Path,
+        default=Path.home() / ".job-agent" / "linkedin_home" / "jobs.json",
+        help="Output path for --linkedin-home-export",
+    )
     parser.add_argument("--db", type=Path, default=root / "jobs.db", help="SQLite path")
     parser.add_argument(
         "--allow-non-israel-email",
@@ -904,6 +930,11 @@ def run(argv: List[str] | None = None) -> int:
         if not ok:
             print("Skipping job run — LinkedIn login was not confirmed.", file=sys.stderr)
             return 1
+
+    if args.linkedin_home_export:
+        from job_agent.linkedin_home_sync import fetch_and_export_linkedin_for_home
+
+        return fetch_and_export_linkedin_for_home(cfg, args.linkedin_home_export_path.resolve())
 
     if args.google_headed and not uses_browser_search(cfg):
         print("--google-headed requires search_mode: browser in config.", file=sys.stderr)

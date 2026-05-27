@@ -138,9 +138,19 @@ def _sum_sites(by_site: Dict[str, int], prefix: str) -> Optional[int]:
 def _unique_added_display(scope: str, by_site: Dict[str, int]) -> str:
     s = (scope or "").strip()
     if s.startswith("LinkedIn Jobs"):
-        if "LinkedIn (browser)" in by_site:
-            return str(by_site["LinkedIn (browser)"])
-        return _NA_ADDED
+        total = 0
+        found = False
+        for label in (
+            "LinkedIn (home sync)",
+            "LinkedIn (browser)",
+            "LinkedIn posts (browser)",
+        ):
+            if label in by_site:
+                total += by_site[label]
+                found = True
+        if found:
+            return str(total)
+        return "0"
     if s.startswith("Google web query"):
         for label in ("Google (browser web)", "SerpAPI: Google web (site: ATS / LinkedIn)"):
             if label in by_site:
@@ -164,8 +174,14 @@ def _unique_added_display(scope: str, by_site: Dict[str, int]) -> str:
 def _consumed_sites(scope: str, by_site: Dict[str, int]) -> Set[str]:
     s = (scope or "").strip()
     consumed: Set[str] = set()
-    if s.startswith("LinkedIn Jobs") and "LinkedIn (browser)" in by_site:
-        consumed.add("LinkedIn (browser)")
+    if s.startswith("LinkedIn Jobs"):
+        for label in (
+            "LinkedIn (home sync)",
+            "LinkedIn (browser)",
+            "LinkedIn posts (browser)",
+        ):
+            if label in by_site:
+                consumed.add(label)
     if s.startswith("Google web query"):
         for label in ("Google (browser web)", "SerpAPI: Google web (site: ATS / LinkedIn)"):
             if label in by_site:

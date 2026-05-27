@@ -89,15 +89,14 @@
     "raanana",
     "רעננה",
     "haifa",
-    "jerusalem",
-    "hybrid",
-    "remote"
+    "jerusalem"
   ],
   "location_hint_strict_location_or_title": false,
   "location_hint_include_job_description": true,
   "location_hint_description_max_chars": 8000,
   "location_filter_source_prefixes": [
     "linkedin_browser",
+    "linkedin_home_sync",
     "google_browser:",
     "greenhouse:",
     "lever:",

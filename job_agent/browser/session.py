@@ -466,17 +466,17 @@ def _send_linkedin_alert(cfg: Dict[str, Any], *, reason: str = "") -> None:
         msg["From"] = email_user
         msg["To"] = admin_email
         body = (
-            "LinkedIn job search failed repeatedly; browser fetches are paused for 24h.\n"
-            "Daily digests continue from Greenhouse, Google, and other sources.\n\n"
+            "LinkedIn needs attention. Daily digests still run from Greenhouse and other sources.\n\n"
         )
         if reason:
-            body += f"Last error: {reason}\n\n"
+            body += f"Details: {reason}\n\n"
         body += (
-            "To restore LinkedIn (optional):\n"
-            "  ssh -X azureuser@20.217.203.43\n"
+            "Restore LinkedIn (home Mac — required):\n"
             "  cd ~/apps/devops-job-agent\n"
-            "  export DISPLAY=:1\n"
-            "  python3 run.py --linkedin-login\n"
+            "  source .venv/bin/activate\n"
+            "  USER_EMAIL=<your@gmail.com> python3 run.py --linkedin-login\n"
+            "  USER_EMAIL=<your@gmail.com> ./scripts/linkedin-home-worker.sh\n\n"
+            "VM LinkedIn is disabled (Azure datacenter IP is blocked by LinkedIn).\n"
         )
         msg.set_content(body)
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.job-agent.linkedin-home</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd $HOME/apps/devops-job-agent 2>/dev/null || cd $HOME/devops-job-agent; ./scripts/linkedin-home-workers-all.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>25</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>25</integer></dict>
+  </array>
+  <key>StandardOutPath</key>
+  <string>/Users/arkadiykats/logs/linkedin-home-workers.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/arkadiykats/logs/linkedin-home-workers.log</string>
+</dict>
+</plist>

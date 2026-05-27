@@ -98,7 +98,18 @@ def linkedin_circuit_status(cfg: Dict[str, Any]) -> Tuple[bool, str]:
     return False, ""
 
 
+def _linkedin_home_export_active() -> bool:
+    return os.getenv("LINKEDIN_HOME_EXPORT", "").strip().lower() in ("1", "true", "yes")
+
+
 def should_skip_linkedin_browser(cfg: Dict[str, Any]) -> bool:
+    # Mac home worker must still run the browser locally.
+    if _linkedin_home_export_active():
+        return False
+    from job_agent.linkedin_home_sync import disable_vm_linkedin_browser, home_sync_enabled
+
+    if home_sync_enabled(cfg) and disable_vm_linkedin_browser(cfg):
+        return True
     open_, _ = linkedin_circuit_status(cfg)
     return open_
 

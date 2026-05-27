@@ -71,6 +71,12 @@ def test_merge_fetch_stats_unique_added():
     assert "Unique added" in merged.columns
     li = merged[merged["Scope"].str.startswith("LinkedIn")].iloc[0]
     assert li["Unique added"] == "28"
+    stats_home = pd.DataFrame(
+        [{"Site": "LinkedIn (home sync)", "Fetched": 15, "Unique added": 15}]
+    )
+    merged_home = build_search_profile_with_fetch_stats_df(cfg, stats_home)
+    li_home = merged_home[merged_home["Scope"].str.startswith("LinkedIn")].iloc[0]
+    assert li_home["Unique added"] == "15"
     gh = merged[merged["Scope"] == "Greenhouse boards"].iloc[0]
     assert gh["Unique added"] == "5"
     loc = merged[merged["Scope"] == "Location filter"].iloc[0]

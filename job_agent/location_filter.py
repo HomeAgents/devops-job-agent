@@ -65,14 +65,17 @@ def _israel_or_il_signals_match(j: Job, cfg: Dict[str, Any], aliases: List[str])
         return True
 
     sl = j.source.lower()
-    if sl == "linkedin_browser":
+    if sl in ("linkedin_browser", "linkedin_home_sync"):
         raw = j.raw if isinstance(j.raw, dict) else {}
         search_url = str(raw.get("search_url") or "").lower()
-        if "israel" in search_url or "ישראל" in search_url:
+        israel_search = "israel" in search_url or "ישראל" in search_url
+        if israel_search and not loc.strip():
             return True
-        if _has_alias(loc, aliases) or _has_alias(title, aliases):
+        if _has_alias(loc, aliases):
             return True
-        return True
+        if israel_search and _has_alias(title, aliases):
+            return True
+        return False
 
     if sl.startswith("google_browser:"):
         raw = j.raw if isinstance(j.raw, dict) else {}

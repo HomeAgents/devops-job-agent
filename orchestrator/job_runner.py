@@ -119,6 +119,32 @@ def build_user_config(user: UserRecord, base_config_path: Path) -> Path:
     browser = cfg.setdefault("browser", {})
     browser["user_data_dir"] = str((work / "browser").resolve())
 
+    li = cfg.get("linkedin")
+    if not isinstance(li, dict):
+        li = {}
+        cfg["linkedin"] = li
+    home_sync = li.setdefault("home_sync", {})
+    if "enabled" not in home_sync:
+        home_sync["enabled"] = True
+    if "skip_vm_linkedin_when_fresh" not in home_sync:
+        home_sync["skip_vm_linkedin_when_fresh"] = True
+    if not home_sync.get("import_path"):
+        home_sync["import_path"] = str((work / "linkedin_home" / "jobs.json").resolve())
+    if "skip_vm_reach_out_when_fresh" not in home_sync:
+        home_sync["skip_vm_reach_out_when_fresh"] = True
+    if "skip_google_browser_when_fresh" not in home_sync:
+        home_sync["skip_google_browser_when_fresh"] = True
+    if "disable_vm_linkedin_browser" not in home_sync:
+        home_sync["disable_vm_linkedin_browser"] = True
+    if "stale_fallback_hours" not in home_sync:
+        home_sync["stale_fallback_hours"] = 36
+    if "alert_on_missing" not in home_sync:
+        home_sync["alert_on_missing"] = True
+
+    from job_agent.linkedin_home_sync import apply_fast_vm_overrides_when_home_sync_fresh
+
+    cfg = apply_fast_vm_overrides_when_home_sync_fresh(cfg)
+
     digest_remove = cfg.setdefault("digest_remove", {})
     digest_remove["ignore_store_path"] = str((work / "digest_ignore_links.json").resolve())
     secret = os.getenv("ORCHESTRATOR_REMOVE_SECRET", "").strip()

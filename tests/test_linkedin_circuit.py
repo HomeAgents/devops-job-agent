@@ -10,6 +10,17 @@ from job_agent.linkedin_circuit import (
 )
 
 
+def test_vm_linkedin_skipped_when_home_sync_required() -> None:
+    cfg = {"linkedin": {"home_sync": {"enabled": True, "disable_vm_linkedin_browser": True}}}
+    assert should_skip_linkedin_browser(cfg)
+
+
+def test_home_export_does_not_skip_browser(monkeypatch) -> None:
+    cfg = {"linkedin": {"home_sync": {"enabled": True, "disable_vm_linkedin_browser": True}}}
+    monkeypatch.setenv("LINKEDIN_HOME_EXPORT", "1")
+    assert not should_skip_linkedin_browser(cfg)
+
+
 def test_circuit_opens_after_three_failures(tmp_path: Path) -> None:
     cfg = {
         "linkedin": {

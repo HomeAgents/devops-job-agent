@@ -822,9 +822,11 @@ def enrich_reach_out_for_jobs(
         return
     need: List[Job] = []
     for job in jobs:
-        if job.source != "linkedin_browser":
+        if job.source not in ("linkedin_browser", "linkedin_home_sync"):
             continue
         raw = job.raw if isinstance(job.raw, dict) else {}
+        if raw.get("_home_sync"):
+            continue
         if for_email:
             need.append(job)
             continue
