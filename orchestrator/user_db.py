@@ -229,7 +229,7 @@ class UserDB:
         out: list[UserRecord] = []
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM users WHERE state IN ('scheduled', 'ready', 'returning')"
+                "SELECT * FROM users WHERE state IN ('scheduled', 'ready', 'returning', 'report_sent')"
             ).fetchall()
         for row in rows:
             user = self._row_to_user(row)

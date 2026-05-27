@@ -31,3 +31,15 @@ def test_user_db_roundtrip(tmp_path: Path) -> None:
     assert u2.keywords == "devops manager"
     due = db.users_due_today(0)
     assert any(x.email == "test@example.com" for x in due)
+
+
+def test_report_sent_users_included_in_daily(tmp_path: Path) -> None:
+    db = UserDB(tmp_path / "t.db")
+    u = db.get_or_create("subscriber@example.com")
+    db.update_user(
+        u.id,
+        state="report_sent",
+        schedule_days=[0, 1, 2, 3, 4, 5, 6],
+    )
+    due = db.users_due_today(3)
+    assert any(x.email == "subscriber@example.com" for x in due)

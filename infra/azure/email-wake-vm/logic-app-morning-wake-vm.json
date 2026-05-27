@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "logicAppName": { "type": "string", "defaultValue": "la-morning-wake-home-agents" },
+    "location": { "type": "string", "defaultValue": "israelcentral" },
+    "subscriptionId": { "type": "string", "defaultValue": "40f9da3f-642b-4815-9af4-4556e9114038" },
+    "resourceGroupName": { "type": "string", "defaultValue": "rg-home-agents" },
+    "vmName": { "type": "string", "defaultValue": "vm-home-agents" }
+  },
+  "variables": {
+    "vmStartUri": "[concat('https://management.azure.com/subscriptions/', parameters('subscriptionId'), '/resourceGroups/', parameters('resourceGroupName'), '/providers/Microsoft.Compute/virtualMachines/', parameters('vmName'), '/start?api-version=2024-07-01')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('logicAppName')]",
+      "location": "[parameters('location')]",
+      "identity": { "type": "SystemAssigned" },
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "triggers": {
+            "Morning_Wake": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "schedule": {
+                  "hours": [8],
+                  "minutes": [50]
+                },
+                "timeZone": "Israel Standard Time"
+              }
+            }
+          },
+          "actions": {
+            "Start_VM": {
+              "type": "Http",
+              "runAfter": {},
+              "inputs": {
+                "method": "POST",
+                "uri": "[variables('vmStartUri')]",
+                "authentication": { "type": "ManagedServiceIdentity" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), 'vm-contributor-morning')]",
+      "dependsOn": ["[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]"],
+      "properties": {
+        "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/9980e02c-c2be-4d73-94e8-173b1dc7caf3')]",
+        "principalId": "[reference(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), '2019-05-01', 'Full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    }
+  ]
+}
