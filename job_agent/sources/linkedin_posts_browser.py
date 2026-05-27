@@ -14,7 +14,13 @@ def _jittered_sleep(base: float, jitter_fraction: float = 0.3) -> None:
     delta = base * jitter_fraction
     time.sleep(base + random.uniform(-delta, delta))
 
-from job_agent.browser.session import playwright_available, with_linkedin_context
+from job_agent.browser.session import (
+    page_is_linkedin_auth_wall,
+    playwright_available,
+    recover_linkedin_session_on_page,
+    with_linkedin_context,
+    _send_linkedin_alert,
+)
 from job_agent.linkedin_og import hiring_signal_in_text, matches_leadership_role_focus
 from job_agent.models import Job
 from job_agent.scoring import score_title
@@ -146,10 +152,20 @@ def fetch_linkedin_posts(cfg: Dict[str, Any]) -> List[Job]:
             pass
         _jittered_sleep(4.0)
 
-        url_low = (page.url or "").lower()
-        if "authwall" in url_low or "uas/login" in url_low:
-            print("LinkedIn posts: not logged in (auth wall)", file=sys.stderr)
-            return []
+        if page_is_linkedin_auth_wall(page):
+            if not recover_linkedin_session_on_page(page, cfg, search_url=search_url):
+                print("LinkedIn posts: not logged in (auth wall)", file=sys.stderr)
+                _send_linkedin_alert(cfg)
+                return []
+            if page_is_linkedin_auth_wall(page):
+                from job_agent.browser.session import warm_linkedin_via_feed
+
+                if warm_linkedin_via_feed(page, search_url, via_jobs_nav=False):
+                    _jittered_sleep(4.0)
+            if page_is_linkedin_auth_wall(page):
+                print("LinkedIn posts: not logged in (auth wall after recovery)", file=sys.stderr)
+                _send_linkedin_alert(cfg)
+                return []
 
         for scroll_idx in range(max_scrolls):
             if scroll_idx > 0:

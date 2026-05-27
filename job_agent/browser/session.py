@@ -109,6 +109,24 @@ def _launch_persistent(cfg: Dict[str, Any], *, headless: bool, service: str = "l
     return pw, context
 
 
+def page_is_linkedin_auth_wall(page, *, require_job_cards: bool = False) -> bool:
+    """True when LinkedIn is showing login / auth wall instead of content."""
+    url_low = (page.url or "").lower()
+    title_low = (page.title() or "").lower()
+    job_links = page.locator('a[href*="/jobs/view/"]').count()
+    if "authwall" in url_low or "uas/login" in url_low:
+        return True
+    if (
+        ("login" in url_low or "sign up" in title_low)
+        and "session_redirect" not in url_low
+        and job_links == 0
+    ):
+        return True
+    if require_job_cards and "linkedin.com/jobs" in url_low and job_links == 0:
+        return not _page_looks_logged_in(page)
+    return False
+
+
 def _page_looks_logged_in(page) -> bool:
     url = (page.url or "").lower()
     title = (page.title() or "").lower()
@@ -129,7 +147,7 @@ def _page_looks_logged_in(page) -> bool:
 
 
 def linkedin_session_ready(cfg: Dict[str, Any], *, headless: bool = True) -> bool:
-    """Quick check whether the saved browser profile can access LinkedIn (not auth wall)."""
+    """Quick check whether the saved browser profile can access LinkedIn jobs (not auth wall)."""
     if not playwright_available():
         return False
     pw, context = _launch_persistent(cfg, headless=headless, service="linkedin")
@@ -141,6 +159,10 @@ def linkedin_session_ready(cfg: Dict[str, Any], *, headless: bool = True) -> boo
             timeout=90_000,
         )
         time.sleep(2.5)
+        if page_is_linkedin_auth_wall(page, require_job_cards=True):
+            return False
+        if page.locator('a[href*="/jobs/view/"]').count() > 0:
+            return True
         return _page_looks_logged_in(page)
     except Exception:
         return False
@@ -154,6 +176,65 @@ def _human_scroll(page, times: int = 3) -> None:
         distance = random.randint(200, 600)
         page.mouse.wheel(0, distance)
         time.sleep(random.uniform(0.8, 2.5))
+
+
+def _visible_login_fields(page):
+    """Visible email/password fields only (ignore hidden session_key inputs)."""
+    email = page.locator(
+        'input#username:visible, input[name="session_key"]:not([type="hidden"]):visible'
+    )
+    password = page.locator(
+        'input#password:visible, input[name="session_password"]:not([type="hidden"]):visible'
+    )
+    return email, password
+
+
+def _has_visible_login_form(page) -> bool:
+    email, password = _visible_login_fields(page)
+    return email.count() > 0 and password.count() > 0
+
+
+def warm_linkedin_via_feed(page, target_url: str, *, via_jobs_nav: bool = False) -> bool:
+    """Navigate feed → (optional Jobs) → target URL to avoid cold /jobs/search auth wall."""
+    try:
+        page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=60_000)
+        time.sleep(random.uniform(2, 4))
+        if not _page_looks_logged_in(page):
+            return False
+        _human_scroll(page, times=random.randint(1, 3))
+        if via_jobs_nav:
+            try:
+                jobs_nav = page.locator(
+                    'a.global-nav__primary-link[href*="/jobs"], '
+                    'a[href="https://www.linkedin.com/jobs/"], '
+                    'a[href="/jobs/"]'
+                )
+                if jobs_nav.count() > 0:
+                    jobs_nav.first.click(timeout=10_000)
+                    time.sleep(random.uniform(2, 5))
+                else:
+                    page.goto("https://www.linkedin.com/jobs/", wait_until="domcontentloaded", timeout=60_000)
+                    time.sleep(random.uniform(2, 4))
+            except Exception:
+                page.goto("https://www.linkedin.com/jobs/", wait_until="domcontentloaded", timeout=60_000)
+                time.sleep(random.uniform(2, 4))
+            _human_scroll(page, times=random.randint(1, 2))
+        page.goto(target_url, wait_until="domcontentloaded", timeout=90_000)
+        time.sleep(random.uniform(3, 6))
+        _human_scroll(page, times=random.randint(1, 2))
+        if via_jobs_nav:
+            return page.locator('a[href*="/jobs/view/"]').count() > 0
+        return _page_looks_logged_in(page) and not page_is_linkedin_auth_wall(page)
+    except Exception as exc:
+        print(f"linkedin warm navigation: {exc}", file=sys.stderr)
+        return False
+
+
+def warm_linkedin_for_jobs_search(page, search_url: str) -> bool:
+    """Warm session via feed → Jobs before hitting /jobs/search."""
+    if page.locator('a[href*="/jobs/view/"]').count() > 0:
+        return True
+    return warm_linkedin_via_feed(page, search_url, via_jobs_nav=True)
 
 
 def _human_browse_feed(page) -> None:
@@ -210,38 +291,34 @@ def linkedin_keepalive(cfg: Dict[str, Any], *, headless: bool = True) -> bool:
         _safe_close(context, pw)
 
 
-def linkedin_auto_login(cfg: Dict[str, Any], *, headless: bool = True) -> bool:
-    """Attempt automated login using stored credentials.
-
-    Reads LINKEDIN_EMAIL and LINKEDIN_PASSWORD from env or .env.
-    Returns True if login succeeded, False if 2FA or other block.
-    """
-    if not playwright_available():
-        return False
+def _linkedin_auto_login_on_page(page, cfg: Dict[str, Any]) -> bool:
+    """Log in on an existing Playwright page (credentials from env)."""
     email = os.environ.get("LINKEDIN_EMAIL", "").strip()
     password = os.environ.get("LINKEDIN_PASSWORD", "").strip()
     if not email or not password:
         print("linkedin_auto_login: LINKEDIN_EMAIL/LINKEDIN_PASSWORD not set", file=sys.stderr)
         return False
 
-    pw, context = _launch_persistent(cfg, headless=headless, service="linkedin")
     try:
-        page = context.pages[0] if context.pages else context.new_page()
-
         page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=60_000)
         time.sleep(random.uniform(2, 3))
-        if _page_looks_logged_in(page):
-            print("linkedin_auto_login: already logged in", file=sys.stderr)
+        if _page_looks_logged_in(page) and not page_is_linkedin_auth_wall(page):
+            print("linkedin_auto_login: already logged in (feed)", file=sys.stderr)
             return True
 
         page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded", timeout=60_000)
         time.sleep(random.uniform(1.5, 3))
 
-        email_field = page.locator('#username, input[name="session_key"]')
-        pass_field = page.locator('#password, input[name="session_password"]')
-        if email_field.count() == 0 or pass_field.count() == 0:
+        if not _has_visible_login_form(page):
+            page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=60_000)
+            time.sleep(random.uniform(2, 3))
+            if _page_looks_logged_in(page):
+                print("linkedin_auto_login: session active (no visible login form)", file=sys.stderr)
+                return True
             print("linkedin_auto_login: login form not found", file=sys.stderr)
             return False
+
+        email_field, pass_field = _visible_login_fields(page)
 
         email_field.first.click()
         time.sleep(random.uniform(0.3, 0.8))
@@ -282,14 +359,58 @@ def linkedin_auto_login(cfg: Dict[str, Any], *, headless: bool = True) -> bool:
             print("linkedin_auto_login: login successful (redirect)", file=sys.stderr)
             return True
 
-        print(
-            f"linkedin_auto_login: login failed (url={page.url})",
-            file=sys.stderr,
-        )
+        print(f"linkedin_auto_login: login failed (url={page.url})", file=sys.stderr)
         return False
     except Exception as exc:
         print(f"linkedin_auto_login: error: {exc}", file=sys.stderr)
         return False
+
+
+def recover_linkedin_session_on_page(
+    page,
+    cfg: Dict[str, Any],
+    *,
+    search_url: str | None = None,
+    need_job_cards: bool = False,
+) -> bool:
+    """Recover on the current page: warm jobs nav, then credential login if needed."""
+    if page.locator('a[href*="/jobs/view/"]').count() > 0:
+        return True
+
+    if need_job_cards and search_url and _page_looks_logged_in(page):
+        print("LinkedIn: warming jobs session (logged in, no job cards)...", file=sys.stderr)
+        if warm_linkedin_for_jobs_search(page, search_url):
+            return True
+
+    if _page_looks_logged_in(page) and not need_job_cards and not page_is_linkedin_auth_wall(page):
+        return True
+
+    if page_is_linkedin_auth_wall(page) or need_job_cards:
+        print("LinkedIn: in-session recovery...", file=sys.stderr)
+        if _linkedin_auto_login_on_page(page, cfg):
+            if need_job_cards and search_url:
+                return warm_linkedin_for_jobs_search(page, search_url)
+            return _page_looks_logged_in(page) and not page_is_linkedin_auth_wall(page)
+
+        if need_job_cards and search_url and _page_looks_logged_in(page):
+            return warm_linkedin_for_jobs_search(page, search_url)
+
+    return page.locator('a[href*="/jobs/view/"]').count() > 0
+
+
+def linkedin_auto_login(cfg: Dict[str, Any], *, headless: bool = True) -> bool:
+    """Attempt automated login using stored credentials.
+
+    Reads LINKEDIN_EMAIL and LINKEDIN_PASSWORD from env or .env.
+    Returns True if login succeeded, False if 2FA or other block.
+    """
+    if not playwright_available():
+        return False
+
+    pw, context = _launch_persistent(cfg, headless=headless, service="linkedin")
+    try:
+        page = context.pages[0] if context.pages else context.new_page()
+        return _linkedin_auto_login_on_page(page, cfg)
     finally:
         _safe_close(context, pw)
 
