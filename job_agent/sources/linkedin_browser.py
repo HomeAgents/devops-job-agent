@@ -22,7 +22,11 @@ from job_agent.browser.session import (
     playwright_available,
     recover_linkedin_session_on_page,
     with_linkedin_context,
-    _send_linkedin_alert,
+)
+from job_agent.linkedin_circuit import (
+    linkedin_circuit_skip_message,
+    note_linkedin_fetch_result,
+    should_skip_linkedin_browser,
 )
 from job_agent.models import Job
 from job_agent.network import (
@@ -809,6 +813,8 @@ def enrich_reach_out_for_jobs(
     """Open LinkedIn and scrape «People you can reach out to» for jobs missing that data."""
     if not jobs or not _linkedin_block(cfg).get("enabled", True):
         return
+    if should_skip_linkedin_browser(cfg):
+        return
     if not playwright_available():
         return
     js = _jobs_search_block(cfg)
@@ -938,6 +944,11 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
             file=sys.stderr,
         )
         return []
+    if should_skip_linkedin_browser(cfg):
+        msg = linkedin_circuit_skip_message(cfg)
+        if msg:
+            print(msg, file=sys.stderr)
+        return []
 
     js = _jobs_search_block(cfg)
     max_pages = max(1, int(js.get("max_pages") or 3))
@@ -965,7 +976,7 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
                 page, cfg, search_url=search_url, need_job_cards=True
             ):
                 print("LinkedIn browser: session recovery failed — skipping", file=sys.stderr)
-                _send_linkedin_alert(cfg)
+                note_linkedin_fetch_result(cfg, jobs_count=0, reason="session_recovery_failed")
                 return []
             if page.locator('a[href*="/jobs/view/"]').count() == 0:
                 page.goto(search_url, wait_until="domcontentloaded", timeout=90_000)
@@ -982,7 +993,7 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
                     "Run: python3 run.py --linkedin-login",
                     file=sys.stderr,
                 )
-                _send_linkedin_alert(cfg)
+                note_linkedin_fetch_result(cfg, jobs_count=0, reason="auth_wall_after_recovery")
                 return []
 
         for page_idx in range(max_pages):
@@ -1037,4 +1048,9 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
         if out:
             _enrich_jobs_reach_out_people(page, out, search_url, cfg)
 
+    note_linkedin_fetch_result(
+        cfg,
+        jobs_count=len(out),
+        reason="" if out else "no_jobs_collected",
+    )
     return out

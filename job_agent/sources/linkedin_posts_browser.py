@@ -19,8 +19,8 @@ from job_agent.browser.session import (
     playwright_available,
     recover_linkedin_session_on_page,
     with_linkedin_context,
-    _send_linkedin_alert,
 )
+from job_agent.linkedin_circuit import linkedin_circuit_skip_message, should_skip_linkedin_browser
 from job_agent.linkedin_og import hiring_signal_in_text, matches_leadership_role_focus
 from job_agent.models import Job
 from job_agent.scoring import score_title
@@ -128,6 +128,11 @@ def fetch_linkedin_posts(cfg: Dict[str, Any]) -> List[Job]:
         return []
     if not playwright_available():
         return []
+    if should_skip_linkedin_browser(cfg):
+        msg = linkedin_circuit_skip_message(cfg)
+        if msg:
+            print(msg.replace("LinkedIn browser", "LinkedIn posts"), file=sys.stderr)
+        return []
 
     search_url = _build_posts_search_url(cfg)
     max_scrolls = int(ps.get("max_scrolls", 3))
@@ -155,7 +160,6 @@ def fetch_linkedin_posts(cfg: Dict[str, Any]) -> List[Job]:
         if page_is_linkedin_auth_wall(page):
             if not recover_linkedin_session_on_page(page, cfg, search_url=search_url):
                 print("LinkedIn posts: not logged in (auth wall)", file=sys.stderr)
-                _send_linkedin_alert(cfg)
                 return []
             if page_is_linkedin_auth_wall(page):
                 from job_agent.browser.session import warm_linkedin_via_feed
@@ -164,7 +168,6 @@ def fetch_linkedin_posts(cfg: Dict[str, Any]) -> List[Job]:
                     _jittered_sleep(4.0)
             if page_is_linkedin_auth_wall(page):
                 print("LinkedIn posts: not logged in (auth wall after recovery)", file=sys.stderr)
-                _send_linkedin_alert(cfg)
                 return []
 
         for scroll_idx in range(max_scrolls):

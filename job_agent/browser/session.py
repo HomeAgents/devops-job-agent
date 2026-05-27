@@ -284,7 +284,15 @@ def linkedin_keepalive(cfg: Dict[str, Any], *, headless: bool = True) -> bool:
         )
         time.sleep(random.uniform(2, 5))
         _human_scroll(page, times=random.randint(1, 2))
-        return _page_looks_logged_in(page)
+        ok = _page_looks_logged_in(page)
+        if ok:
+            try:
+                from job_agent.linkedin_circuit import record_linkedin_success
+
+                record_linkedin_success(cfg)
+            except Exception:
+                pass
+        return ok
     except Exception:
         return False
     finally:
@@ -429,11 +437,15 @@ def ensure_linkedin_session(cfg: Dict[str, Any], *, headless: bool = True) -> bo
     print("Keepalive failed — attempting auto-login...", file=sys.stderr)
     if linkedin_auto_login(cfg, headless=headless):
         return True
-    _send_linkedin_alert(cfg)
     return False
 
 
-def _send_linkedin_alert(cfg: Dict[str, Any]) -> None:
+def send_linkedin_alert_once(cfg: Dict[str, Any], *, reason: str = "") -> None:
+    """Send alert email to admin when LinkedIn login fails (call sparingly)."""
+    _send_linkedin_alert(cfg, reason=reason)
+
+
+def _send_linkedin_alert(cfg: Dict[str, Any], *, reason: str = "") -> None:
     """Send alert email to admin when LinkedIn login fails."""
     try:
         from job_agent.settings import get_setting
@@ -453,13 +465,20 @@ def _send_linkedin_alert(cfg: Dict[str, Any]) -> None:
         msg["Subject"] = "Job Agent: LinkedIn login required"
         msg["From"] = email_user
         msg["To"] = admin_email
-        msg.set_content(
-            "LinkedIn session expired and auto-login failed.\n"
-            "Manual re-login needed:\n\n"
-            "  ssh -X azureuser@VM\n"
+        body = (
+            "LinkedIn job search failed repeatedly; browser fetches are paused for 24h.\n"
+            "Daily digests continue from Greenhouse, Google, and other sources.\n\n"
+        )
+        if reason:
+            body += f"Last error: {reason}\n\n"
+        body += (
+            "To restore LinkedIn (optional):\n"
+            "  ssh -X azureuser@20.217.203.43\n"
             "  cd ~/apps/devops-job-agent\n"
+            "  export DISPLAY=:1\n"
             "  python3 run.py --linkedin-login\n"
         )
+        msg.set_content(body)
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(email_user, email_pass)
             s.send_message(msg)
