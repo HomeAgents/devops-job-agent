@@ -15,6 +15,7 @@ from orchestrator.digest_server import ensure_shared_remove_server
 sys.exit(0 if ensure_shared_remove_server() else 1)
 " >>"$LOG" 2>&1; then
   echo "[$(date -Iseconds)] digest-remove-server OK" >>"$LOG"
+  "${ROOT}/scripts/sync-remove-base-url.sh" >>"$LOG" 2>&1 || true
 else
   echo "[$(date -Iseconds)] digest-remove-server FAILED — starting via script" >>"$LOG"
   if ! pgrep -f "run.py --digest-remove-server" >/dev/null 2>&1; then

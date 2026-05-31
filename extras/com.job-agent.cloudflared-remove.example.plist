@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Quick Cloudflare tunnel → local digest remove server (port 8791).
+  After URL appears in the log, run: ./scripts/sync-remove-base-url.sh
+
+  Install: ./scripts/install-mac-remove-stack.sh
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.job-agent.cloudflared-remove</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>WorkingDirectory</key>
+  <string>/Users/arkadiykats/devops-job-agent</string>
+  <key>StandardOutPath</key>
+  <string>/Users/arkadiykats/logs/digest-remove-cloudflared.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/arkadiykats/logs/digest-remove-cloudflared.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/arkadiykats</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/cloudflared</string>
+    <string>tunnel</string>
+    <string>--no-autoupdate</string>
+    <string>--url</string>
+    <string>http://127.0.0.1:8791</string>
+  </array>
+</dict>
+</plist>

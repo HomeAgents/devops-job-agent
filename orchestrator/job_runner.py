@@ -81,7 +81,8 @@ def build_user_config(user: UserRecord, base_config_path: Path) -> Path:
     cfg = json.loads(base_config_path.read_text(encoding="utf-8"))
     cfg = deepcopy(cfg)
 
-    keywords_raw = (user.meta.get("approved_keyword_query") or user.keywords or "").strip()
+    # DB keywords (orchestrator) win over legacy approved_keyword_query in meta.
+    keywords_raw = (user.keywords or user.meta.get("approved_keyword_query") or "").strip()
     location = (
         str(user.meta.get("location_hint") or "").strip()
         or str(cfg.get("location_hint") or "").strip()
@@ -93,6 +94,27 @@ def build_user_config(user: UserRecord, base_config_path: Path) -> Path:
     js["location"] = location
     if not js.get("f_TPR"):
         js["f_TPR"] = "r2592000"  # past month; user can override in base config
+    cap = int(js.get("max_queries_per_run") or 15)
+    meta_queries = user.meta.get("linkedin_search_queries")
+    if isinstance(meta_queries, list) and meta_queries:
+        js["multi_search"] = True
+        js["queries"] = [str(q).strip() for q in meta_queries if str(q).strip()][:cap]
+    elif "|" in keywords_raw:
+        parts = [p.strip().strip('"') for p in keywords_raw.split("|") if p.strip()]
+        if len(parts) > 1:
+            js["multi_search"] = True
+            js["queries"] = parts[:cap]
+    else:
+        saved = work / "config.json"
+        if saved.is_file():
+            try:
+                prev = json.loads(saved.read_text(encoding="utf-8"))
+                pjs = (prev.get("linkedin") or {}).get("jobs_search") or {}
+                if isinstance(pjs, dict) and pjs.get("queries"):
+                    js["multi_search"] = bool(pjs.get("multi_search", True))
+                    js["queries"] = list(pjs["queries"])
+            except (OSError, json.JSONDecodeError):
+                pass
     cfg["location_hint"] = location
 
     _sync_google_search_from_linkedin(cfg, keywords, location)
@@ -191,6 +213,7 @@ def _finish_job_run(user: UserRecord, db: UserDB, proc: subprocess.CompletedProc
         meta["first_execution_complete"] = True
         updates["state"] = "report_sent"
         updates["report_sent_at"] = _utc_now()
+        updates["last_outbound_at"] = _utc_now()
         # Feedback only after first real digest; enable when ORCHESTRATOR_FEEDBACK_ENABLED=1
         if os.getenv("ORCHESTRATOR_FEEDBACK_ENABLED", "0").strip().lower() in ("1", "true", "yes"):
             updates["pending_feedback"] = True

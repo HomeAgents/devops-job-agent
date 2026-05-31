@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import random
 import re
 import sys
@@ -28,6 +29,17 @@ from job_agent.linkedin_circuit import (
     note_linkedin_fetch_result,
     should_skip_linkedin_browser,
 )
+
+
+def _maybe_alert_session_expired(cfg: Dict[str, Any], reason: str) -> None:
+    if os.getenv("LINKEDIN_HOME_EXPORT", "").strip().lower() not in ("1", "true", "yes"):
+        return
+    try:
+        from orchestrator.linkedin_alerts import maybe_alert_linkedin_session_expired
+
+        maybe_alert_linkedin_session_expired(cfg, reason)
+    except ImportError:
+        pass
 from job_agent.models import Job
 from job_agent.network import (
     REACH_OUT_LINKEDIN_SOURCE,
@@ -53,9 +65,41 @@ def _jobs_search_block(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return js if isinstance(js, dict) else {}
 
 
-def build_linkedin_jobs_search_url(cfg: Dict[str, Any]) -> str:
+def _format_single_query_keywords(phrase: str) -> str:
+    """One UI-style search phrase → quoted keywords for LinkedIn Jobs URL."""
+    p = (phrase or "").strip()
+    if not p:
+        return '"devops manager"'
+    if " OR " in p.upper():
+        return p
+    return f'"{p.strip().strip(chr(34))}"'
+
+
+def jobs_search_queries(cfg: Dict[str, Any]) -> List[str]:
+    """Split configured keywords into separate searches (home multi-search)."""
     js = _jobs_search_block(cfg)
-    keywords = (js.get("keywords") or "devops manager").strip()
+    cap = max(1, int(js.get("max_queries_per_run") or 15))
+    explicit = js.get("queries")
+    if isinstance(explicit, list):
+        out = [str(q).strip() for q in explicit if str(q).strip()]
+        return out[:cap] if out else [_format_single_query_keywords("devops manager")]
+    kw = (js.get("keywords") or "devops manager").strip()
+    if not js.get("multi_search", False):
+        return [kw]
+    if "|" in kw:
+        parts = [p.strip().strip('"') for p in kw.split("|") if p.strip()]
+        return parts[:cap] if parts else [kw]
+    parts = re.split(r"\s+OR\s+", kw, flags=re.IGNORECASE)
+    split = [p.strip().strip('"') for p in parts if p.strip()]
+    return split[:cap] if len(split) > 1 else [kw]
+
+
+def build_linkedin_jobs_search_url(cfg: Dict[str, Any], *, keywords: Optional[str] = None) -> str:
+    js = _jobs_search_block(cfg)
+    if keywords is not None:
+        keywords = _format_single_query_keywords(keywords)
+    else:
+        keywords = (js.get("keywords") or "devops manager").strip()
     location = (js.get("location") or "Israel").strip()
     params = f"keywords={quote_plus(keywords)}&location={quote_plus(location)}"
     geo_id = (js.get("geo_id") or "").strip()
@@ -142,7 +186,12 @@ def _extract_cards_from_page(page) -> List[Dict[str, str]]:
           }
         }
         if (!title) continue;
-        out.push({ href, title, company, location });
+        let snippet = '';
+        if (card) {
+          snippet = (card.innerText || card.textContent || '').replace(/\\s+/g, ' ').trim();
+          if (snippet.length > 900) snippet = snippet.slice(0, 900);
+        }
+        out.push({ href, title, company, location, snippet });
       }
       return out;
     }
@@ -160,15 +209,47 @@ def _extract_cards_from_page(page) -> List[Dict[str, str]]:
         href = str(item.get("href") or "").strip()
         title = str(item.get("title") or "").strip().split("\n")[0].strip()
         if href and title:
-            rows.append(
-                {
-                    "href": href,
-                    "title": title[:300],
-                    "company": str(item.get("company") or "").strip()[:120],
-                    "location": str(item.get("location") or "").strip()[:120],
-                }
-            )
+            row = {
+                "href": href,
+                "title": title[:300],
+                "company": str(item.get("company") or "").strip()[:120],
+                "location": str(item.get("location") or "").strip()[:120],
+            }
+            snippet = str(item.get("snippet") or "").strip()
+            if snippet:
+                row["snippet"] = snippet[:900]
+            rows.append(row)
     return rows
+
+
+def _scroll_jobs_results_panel(page, *, steps: int = 4) -> None:
+    """Scroll LinkedIn's left-hand job results list so lazy-loaded cards appear."""
+    try:
+        page.evaluate(
+            """
+            (steps) => {
+              const list = document.querySelector(
+                'div.jobs-search-results-list, ul.jobs-search-results__list, ' +
+                '.scaffold-layout__list, div[class*="jobs-search-results"]'
+              );
+              const n = Math.max(1, steps);
+              if (list && list.scrollHeight > list.clientHeight) {
+                const step = Math.max(280, Math.floor(list.scrollHeight / n));
+                for (let i = 0; i < n; i++) {
+                  list.scrollTop = Math.min(list.scrollTop + step, list.scrollHeight);
+                }
+                return;
+              }
+              window.scrollTo(0, document.body.scrollHeight);
+            }
+            """,
+            steps,
+        )
+    except Exception:
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
 
 
 def _search_url_with_job_id(search_url: str, job_id: str) -> str:
@@ -936,6 +1017,222 @@ def _enrich_jobs_reach_out_people(
     )
 
 
+def _prepare_linkedin_search_page(page, cfg: Dict[str, Any], search_url: str) -> bool:
+    """Navigate to search URL and ensure logged-in job cards are visible."""
+    page.goto(search_url, wait_until="domcontentloaded", timeout=90_000)
+    try:
+        page.wait_for_selector('a[href*="/jobs/view/"]', timeout=35_000)
+    except Exception:
+        pass
+    _jittered_sleep(5.0)
+
+    job_cards = page.locator('a[href*="/jobs/view/"]').count()
+    if page_is_linkedin_auth_wall(page, require_job_cards=True) or job_cards == 0:
+        if not recover_linkedin_session_on_page(
+            page, cfg, search_url=search_url, need_job_cards=True
+        ):
+            print("LinkedIn browser: session recovery failed — skipping", file=sys.stderr)
+            return False
+        if page.locator('a[href*="/jobs/view/"]').count() == 0:
+            page.goto(search_url, wait_until="domcontentloaded", timeout=90_000)
+            try:
+                page.wait_for_selector('a[href*="/jobs/view/"]', timeout=35_000)
+            except Exception:
+                pass
+            _jittered_sleep(5.0)
+        if page_is_linkedin_auth_wall(page, require_job_cards=True) or (
+            page.locator('a[href*="/jobs/view/"]').count() == 0
+        ):
+            print(
+                "LinkedIn browser: not logged in (auth wall after recovery). "
+                "Run: python3 run.py --linkedin-login",
+                file=sys.stderr,
+            )
+            return False
+    return True
+
+
+def _collect_linkedin_jobs_on_page(
+    page,
+    cfg: Dict[str, Any],
+    search_url: str,
+    *,
+    seen_ids: set[str],
+    out: List[Job],
+) -> int:
+    """Scroll the results list and append jobs from the current search page."""
+    js = _jobs_search_block(cfg)
+    max_pages = max(1, int(js.get("max_pages") or 3))
+    scroll_pause = float(js.get("scroll_pause_seconds") or 1.5)
+    scroll_passes = max(1, int(js.get("scroll_passes") or 5))
+    default_location = _default_search_location(cfg)
+    added = 0
+
+    for page_idx in range(max_pages):
+        rows: List[Dict[str, str]] = []
+        for pass_i in range(scroll_passes):
+            if pass_i > 0:
+                _scroll_jobs_results_panel(page, steps=4)
+                _jittered_sleep(scroll_pause)
+            chunk = _extract_cards_from_page(page)
+            if not chunk and page_idx == 0 and pass_i == 0:
+                _jittered_sleep(4.0)
+                chunk = _extract_cards_from_page(page)
+            seen_href = {r["href"] for r in rows}
+            for c in chunk:
+                if c["href"] not in seen_href:
+                    seen_href.add(c["href"])
+                    rows.append(c)
+        for row in rows:
+            href = row["href"]
+            if href.startswith("/"):
+                href = urljoin("https://www.linkedin.com", href)
+            jid = _job_id_from_href(href)
+            if jid and jid in seen_ids:
+                continue
+            if jid:
+                seen_ids.add(jid)
+            link_n = normalize_url(href.split("?")[0])
+            title = row["title"]
+            company = row["company"] or "Unknown"
+            location = row["location"] or default_location
+            raw: Dict[str, Any] = {"search_url": search_url, "linkedin_job_id": jid}
+            snippet = str(row.get("snippet") or "").strip()
+            if snippet:
+                raw["text"] = snippet
+            out.append(
+                Job(
+                    source="linkedin_browser",
+                    company=company,
+                    title=title,
+                    location=location,
+                    link=link_n,
+                    posted="recent",
+                    score=score_title(title, cfg),
+                    raw=raw,
+                )
+            )
+            added += 1
+
+        if page_idx + 1 >= max_pages:
+            break
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        _jittered_sleep(scroll_pause)
+        try:
+            btn = page.query_selector(
+                'button[aria-label="View next page"], button.jobs-search-pagination__button--next'
+            )
+            if btn and btn.is_enabled():
+                btn.click()
+                _jittered_sleep(scroll_pause)
+            else:
+                break
+        except Exception:
+            break
+    return added
+
+
+def fetch_linkedin_jobs_multi(cfg: Dict[str, Any]) -> List[Job]:
+    """Run several LinkedIn Jobs searches in one browser session; merge by job id."""
+    queries = jobs_search_queries(cfg)
+    if len(queries) <= 1:
+        return fetch_linkedin_jobs_single(cfg, queries[0] if queries else None)
+
+    js = _jobs_search_block(cfg)
+    pause_between = float(js.get("multi_search_pause_seconds") or 2.0)
+    out: List[Job] = []
+    seen_ids: set[str] = set()
+    search_urls: List[str] = []
+
+    print(
+        f"LinkedIn browser: multi-search {len(queries)} queries",
+        file=sys.stderr,
+    )
+
+    with with_linkedin_context(cfg) as (pw, context):
+        page = context.pages[0] if context.pages else context.new_page()
+        auth_failed = False
+        for idx, phrase in enumerate(queries):
+            search_url = build_linkedin_jobs_search_url(cfg, keywords=phrase)
+            search_urls.append(search_url)
+            print(
+                f"LinkedIn browser: search {idx + 1}/{len(queries)} — {phrase[:72]}",
+                file=sys.stderr,
+            )
+            print(f"LinkedIn browser: opening {search_url}", file=sys.stderr)
+            if not _prepare_linkedin_search_page(page, cfg, search_url):
+                auth_failed = True
+                break
+            n = _collect_linkedin_jobs_on_page(
+                page, cfg, search_url, seen_ids=seen_ids, out=out
+            )
+            print(
+                f"LinkedIn browser: +{n} from this query ({len(out)} total unique)",
+                file=sys.stderr,
+            )
+            if idx + 1 < len(queries):
+                _jittered_sleep(pause_between)
+
+        print(
+            f"LinkedIn browser: collected {len(out)} jobs ({len(seen_ids)} unique ids) "
+            f"from {len(search_urls)} searches",
+            file=sys.stderr,
+        )
+        if auth_failed and not out:
+            note_linkedin_fetch_result(cfg, jobs_count=0, reason="session_recovery_failed")
+            _maybe_alert_session_expired(cfg, "session_recovery_failed")
+            return []
+        if out and js.get("scrape_reach_out_people", True):
+            if os.getenv("LINKEDIN_HOME_EXPORT", "").strip().lower() not in ("1", "true", "yes"):
+                _enrich_jobs_reach_out_people(page, out, search_urls[0], cfg)
+
+    note_linkedin_fetch_result(
+        cfg,
+        jobs_count=len(out),
+        reason="" if out else "no_jobs_collected",
+    )
+    return out
+
+
+def fetch_linkedin_jobs_single(
+    cfg: Dict[str, Any], keywords: Optional[str] = None
+) -> List[Job]:
+    """One LinkedIn Jobs search URL."""
+    js = _jobs_search_block(cfg)
+    search_url = build_linkedin_jobs_search_url(cfg, keywords=keywords)
+    default_location = _default_search_location(cfg)
+
+    print(f"LinkedIn browser: opening {search_url}", file=sys.stderr)
+
+    out: List[Job] = []
+    seen_ids: set[str] = set()
+
+    with with_linkedin_context(cfg) as (pw, context):
+        page = context.pages[0] if context.pages else context.new_page()
+        if not _prepare_linkedin_search_page(page, cfg, search_url):
+            note_linkedin_fetch_result(cfg, jobs_count=0, reason="session_recovery_failed")
+            _maybe_alert_session_expired(cfg, "session_recovery_failed")
+            return []
+        _collect_linkedin_jobs_on_page(
+            page, cfg, search_url, seen_ids=seen_ids, out=out
+        )
+
+        print(f"LinkedIn browser: collected {len(out)} jobs ({len(seen_ids)} unique ids)", file=sys.stderr)
+        if out and js.get("scrape_reach_out_people", True):
+            if os.getenv("LINKEDIN_HOME_EXPORT", "").strip().lower() not in ("1", "true", "yes"):
+                _enrich_jobs_reach_out_people(page, out, search_url, cfg)
+
+    note_linkedin_fetch_result(
+        cfg,
+        jobs_count=len(out),
+        reason="" if out else "no_jobs_collected",
+    )
+    return out
+
+
 def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
     """Search LinkedIn Jobs while logged in; requires prior ``--linkedin-login``."""
     if not _linkedin_block(cfg).get("enabled", True):
@@ -953,106 +1250,10 @@ def fetch_linkedin_jobs(cfg: Dict[str, Any]) -> List[Job]:
         return []
 
     js = _jobs_search_block(cfg)
-    max_pages = max(1, int(js.get("max_pages") or 3))
-    scroll_pause = float(js.get("scroll_pause_seconds") or 1.5)
-    search_url = build_linkedin_jobs_search_url(cfg)
-    default_location = _default_search_location(cfg)
+    home = os.getenv("LINKEDIN_HOME_EXPORT", "").strip().lower() in ("1", "true", "yes")
+    if home and js.get("multi_search", True):
+        queries = jobs_search_queries(cfg)
+        if len(queries) > 1:
+            return fetch_linkedin_jobs_multi(cfg)
 
-    print(f"LinkedIn browser: opening {search_url}", file=sys.stderr)
-
-    out: List[Job] = []
-    seen_ids: set[str] = set()
-
-    with with_linkedin_context(cfg) as (pw, context):
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(search_url, wait_until="domcontentloaded", timeout=90_000)
-        try:
-            page.wait_for_selector('a[href*="/jobs/view/"]', timeout=35_000)
-        except Exception:
-            pass
-        _jittered_sleep(5.0)
-
-        job_cards = page.locator('a[href*="/jobs/view/"]').count()
-        if page_is_linkedin_auth_wall(page, require_job_cards=True) or job_cards == 0:
-            if not recover_linkedin_session_on_page(
-                page, cfg, search_url=search_url, need_job_cards=True
-            ):
-                print("LinkedIn browser: session recovery failed — skipping", file=sys.stderr)
-                note_linkedin_fetch_result(cfg, jobs_count=0, reason="session_recovery_failed")
-                return []
-            if page.locator('a[href*="/jobs/view/"]').count() == 0:
-                page.goto(search_url, wait_until="domcontentloaded", timeout=90_000)
-                try:
-                    page.wait_for_selector('a[href*="/jobs/view/"]', timeout=35_000)
-                except Exception:
-                    pass
-                _jittered_sleep(5.0)
-            if page_is_linkedin_auth_wall(page, require_job_cards=True) or (
-                page.locator('a[href*="/jobs/view/"]').count() == 0
-            ):
-                print(
-                    "LinkedIn browser: not logged in (auth wall after recovery). "
-                    "Run: python3 run.py --linkedin-login",
-                    file=sys.stderr,
-                )
-                note_linkedin_fetch_result(cfg, jobs_count=0, reason="auth_wall_after_recovery")
-                return []
-
-        for page_idx in range(max_pages):
-            rows = _extract_cards_from_page(page)
-            if not rows and page_idx == 0:
-                _jittered_sleep(4.0)
-                rows = _extract_cards_from_page(page)
-            for row in rows:
-                href = row["href"]
-                if href.startswith("/"):
-                    href = urljoin("https://www.linkedin.com", href)
-                jid = _job_id_from_href(href)
-                if jid and jid in seen_ids:
-                    continue
-                if jid:
-                    seen_ids.add(jid)
-                link_n = normalize_url(href.split("?")[0])
-                title = row["title"]
-                company = row["company"] or "Unknown"
-                location = row["location"] or default_location
-                out.append(
-                    Job(
-                        source="linkedin_browser",
-                        company=company,
-                        title=title,
-                        location=location,
-                        link=link_n,
-                        posted="recent",
-                        score=score_title(title, cfg),
-                        raw={"search_url": search_url, "linkedin_job_id": jid},
-                    )
-                )
-
-            if page_idx + 1 >= max_pages:
-                break
-            try:
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            except Exception:
-                pass
-            _jittered_sleep(scroll_pause)
-            try:
-                btn = page.query_selector('button[aria-label="View next page"], button.jobs-search-pagination__button--next')
-                if btn and btn.is_enabled():
-                    btn.click()
-                    _jittered_sleep(scroll_pause)
-                else:
-                    break
-            except Exception:
-                break
-
-        print(f"LinkedIn browser: collected {len(out)} jobs ({len(seen_ids)} unique ids)", file=sys.stderr)
-        if out:
-            _enrich_jobs_reach_out_people(page, out, search_url, cfg)
-
-    note_linkedin_fetch_result(
-        cfg,
-        jobs_count=len(out),
-        reason="" if out else "no_jobs_collected",
-    )
-    return out
+    return fetch_linkedin_jobs_single(cfg)

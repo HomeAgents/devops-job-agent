@@ -2,7 +2,7 @@
   "search_version": 2,
   "search_mode": "browser",
   "browser": {
-    "user_data_dir": "~/.job-agent/browser",
+    "user_data_dir": "/Users/arkadiykats/.job-agent/home-users/arkadiy.kats_gmail.com/browser",
     "headless": true,
     "slow_mo_ms": 0,
     "locale": "he-IL"
@@ -21,8 +21,8 @@
       "f_TPR": "",
       "max_pages": 4,
       "scroll_pause_seconds": 1.5,
-      "scrape_reach_out_people": true,
-      "max_jobs_reach_out_scrape": 30,
+      "scrape_reach_out_people": false,
+      "max_jobs_reach_out_scrape": 0,
       "reach_out_pause_seconds": 1.8
     }
   },
@@ -33,7 +33,12 @@
   },
   "use_serpapi": false,
   "rss_feeds": [],
-  "rss_feeds_israel_host_substrings": [".co.il", "alljobs", "drushim", "jobnet"],
+  "rss_feeds_israel_host_substrings": [
+    ".co.il",
+    "alljobs",
+    "drushim",
+    "jobnet"
+  ],
   "google_web_browser": {
     "enabled": true,
     "max_queries_per_run": 6,
@@ -57,11 +62,16 @@
     "role_phrases": [
       "(\"devops manager\" OR \"devops director\" OR \"head of devops\" OR \"vp devops\" OR \"platform engineering manager\" OR \"sre manager\")"
     ],
-    "geo_suffixes": ["Israel"],
+    "geo_suffixes": [
+      "Israel"
+    ],
     "after_days_ago": 40,
     "omit_after_clause": false
   },
-  "greenhouse_boards": ["nice", "taboola"],
+  "greenhouse_boards": [
+    "nice",
+    "taboola"
+  ],
   "comeet": {
     "enabled": true,
     "discover_credentials": true,
@@ -186,8 +196,23 @@
     "מנהל DevOps"
   ],
   "scoring": {
-    "keywords": ["DevOps", "Platform", "SRE", "Infrastructure", "Cloud", "דבאופס", "ענן"],
-    "seniority": ["Manager", "Director", "Head", "VP", "מנהל", "מנהלת"],
+    "keywords": [
+      "DevOps",
+      "Platform",
+      "SRE",
+      "Infrastructure",
+      "Cloud",
+      "דבאופס",
+      "ענן"
+    ],
+    "seniority": [
+      "Manager",
+      "Director",
+      "Head",
+      "VP",
+      "מנהל",
+      "מנהלת"
+    ],
     "director_head_bonus": 2
   }
 }

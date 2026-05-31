@@ -17,22 +17,35 @@ Azure VM (orchestrator)
   skips VM LinkedIn browser when sync is fresh (optional)
 ```
 
-## One-time setup (home machine)
+## Mac worker (automatic for all orchestrator users)
 
-1. Clone/sync `devops-job-agent` (same version as VM).
-2. `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`
-3. `playwright install chromium`
-4. Set `.env` with `LINKEDIN_EMAIL` and `LINKEDIN_PASSWORD`.
-5. `python3 run.py --linkedin-login` (complete login in browser once).
-
-## Run manually
+Cron runs `linkedin-home-workers-all.sh`, which reads **every active user** from `orchestrator.db` (no manual `USER_EMAIL` list). Subscribers only use **email**; they never run scripts.
 
 ```bash
-export VM_HOST=20.217.203.43
-export VM_USER=azureuser
-export USER_EMAIL=arkadiy.kats@gmail.com
-./scripts/linkedin-home-worker.sh
+# Cron (via install-mac-all-agents-cron.sh): 08:25 and 18:25
+./scripts/linkedin-home-workers-all.sh
+# Or:
+python3 run_orchestrator.py linkedin-home-sync
 ```
+
+### One LinkedIn login for everyone (default)
+
+Set in `.env` (or `orchestrator.env`):
+
+```bash
+ORCHESTRATOR_LINKEDIN_SHARED_SESSION=1
+ORCHESTRATOR_LINKEDIN_OWNER_EMAIL=arkadiy.kats@gmail.com
+```
+
+Cron runs **Amnon’s keywords**, **your keywords**, etc., using **your** logged-in browser session. Reach-out / network features stay off on export. Each user still gets their own `linkedin_home/jobs.json`.
+
+### Admin only (once for the owner account)
+
+```bash
+python3 run_orchestrator.py linkedin-bootstrap --email arkadiy.kats@gmail.com
+```
+
+Optional: `LINKEDIN_EMAIL` / `LINKEDIN_PASSWORD` in project `.env` for auto-login. Per-user `linkedin.env` is only needed if `ORCHESTRATOR_LINKEDIN_SHARED_SESSION=0`.
 
 ## Schedule on Mac (cron)
 

@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 orchestrator.env
+**/linkedin.env
+.env.home.*
 orchestrator-data/
 
 # Python

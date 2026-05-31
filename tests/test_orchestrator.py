@@ -8,6 +8,8 @@ from orchestrator.user_db import UserDB, parse_schedule_days
 def test_parse_schedule_days() -> None:
     assert parse_schedule_days("daily") == list(range(7))
     assert parse_schedule_days("weekdays") == [0, 1, 2, 3, 4]
+    assert parse_schedule_days("1") == []
+    assert parse_schedule_days("1\n____") == []
     assert 0 in parse_schedule_days("sun, mon")
     assert parse_schedule_days("each day except saturday") == [0, 1, 2, 3, 4, 5]
     assert parse_schedule_days("each day expect saturday") == [0, 1, 2, 3, 4, 5]

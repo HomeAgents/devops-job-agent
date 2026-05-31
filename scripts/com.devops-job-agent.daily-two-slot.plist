@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Job Agent orchestrator — two runs per day (Asia/Jerusalem):
+    morning: from 09:00 until before 15:00
+    afternoon: from 15:00 until end of day
+
+  launchd every 30 min while Mac is awake; daily_two_slot.py catch-up if cron was missed (sleep).
+
+  Install: ./scripts/install-mac-job-agent-schedule.sh
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.devops-job-agent.daily-two-slot</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>1800</integer>
+  <key>StandardOutPath</key>
+  <string>HOME_PLACEHOLDER/logs/orchestrator-daily-launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>HOME_PLACEHOLDER/logs/orchestrator-daily-launchd.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>HOME_PLACEHOLDER/apps/devops-job-agent/.venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <key>HOME</key>
+    <string>HOME_PLACEHOLDER</string>
+    <key>TZ</key>
+    <string>Asia/Jerusalem</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>ROOT_PLACEHOLDER/scripts/orchestrator-daily-catchup.sh</string>
+  </array>
+</dict>
+</plist>

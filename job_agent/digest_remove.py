@@ -93,9 +93,10 @@ def remove_secret(cfg: Dict[str, Any]) -> str:
                 "Set JOB_AGENT_REMOVE_SECRET env var for explicit control.",
                 file=sys.stderr,
             )
-    user_email = _user_email_from_cfg(cfg).strip().lower()
-    if user_email:
-        return hashlib.sha256(f"{base_secret}:{user_email}".encode()).hexdigest()
+    # Use one stable host-level secret for all users (multi-tenant orchestrator).
+    # User isolation is enforced by payload.user + per-user config resolution.
+    # Per-user secret derivation caused cross-user "Invalid signature" when the
+    # remove server verified a token with a different default user config.
     return base_secret
 
 

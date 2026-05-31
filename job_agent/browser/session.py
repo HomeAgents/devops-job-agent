@@ -440,19 +440,33 @@ def ensure_linkedin_session(cfg: Dict[str, Any], *, headless: bool = True) -> bo
     return False
 
 
-def send_linkedin_alert_once(cfg: Dict[str, Any], *, reason: str = "") -> None:
+def send_linkedin_alert_once(cfg: Dict[str, Any], *, reason: str = "", body: str = "") -> None:
     """Send alert email to admin when LinkedIn login fails (call sparingly)."""
-    _send_linkedin_alert(cfg, reason=reason)
+    _send_linkedin_alert(cfg, reason=reason, body=body)
 
 
-def _send_linkedin_alert(cfg: Dict[str, Any], *, reason: str = "") -> None:
+def _send_linkedin_alert(cfg: Dict[str, Any], *, reason: str = "", body: str = "") -> None:
     """Send alert email to admin when LinkedIn login fails."""
     try:
         from job_agent.settings import get_setting
-        admin_email = (
-            os.environ.get("ORCHESTRATOR_ADMIN_EMAIL")
-            or get_setting("EMAIL_TO", "GMAIL_RECIPIENT").strip()
-        )
+
+        try:
+            from orchestrator.linkedin_alerts import format_linkedin_alert_body, orchestrator_notify_email
+        except ImportError:
+            format_linkedin_alert_body = None  # type: ignore
+            orchestrator_notify_email = None  # type: ignore
+
+        admin_email = orchestrator_notify_email() if orchestrator_notify_email else ""
+        if not admin_email:
+            admin_email = (
+                os.environ.get("ORCHESTRATOR_ADMIN_EMAIL")
+                or os.environ.get("ORCHESTRATOR_LINKEDIN_OWNER_EMAIL")
+                or ""
+            ).strip()
+        if not admin_email:
+            hint = Path.home() / ".job-agent" / "linkedin-notify-email.txt"
+            if hint.is_file():
+                admin_email = hint.read_text(encoding="utf-8").strip()
         if not admin_email:
             return
         email_user = get_setting("EMAIL_USER", "GMAIL_EMAIL").strip()
@@ -462,23 +476,20 @@ def _send_linkedin_alert(cfg: Dict[str, Any], *, reason: str = "") -> None:
         import smtplib
         from email.message import EmailMessage
         msg = EmailMessage()
-        msg["Subject"] = "Job Agent: LinkedIn login required"
+        msg["Subject"] = "Job Agent: LinkedIn session expired — action required"
         msg["From"] = email_user
         msg["To"] = admin_email
-        body = (
-            "LinkedIn needs attention. Daily digests still run from Greenhouse and other sources.\n\n"
-        )
-        if reason:
-            body += f"Details: {reason}\n\n"
-        body += (
-            "Restore LinkedIn (home Mac — required):\n"
-            "  cd ~/apps/devops-job-agent\n"
-            "  source .venv/bin/activate\n"
-            "  USER_EMAIL=<your@gmail.com> python3 run.py --linkedin-login\n"
-            "  USER_EMAIL=<your@gmail.com> ./scripts/linkedin-home-worker.sh\n\n"
-            "VM LinkedIn is disabled (Azure datacenter IP is blocked by LinkedIn).\n"
-        )
-        msg.set_content(body)
+        if body.strip():
+            msg.set_content(body.strip())
+        elif format_linkedin_alert_body:
+            msg.set_content(format_linkedin_alert_body(reason=reason))
+        else:
+            msg.set_content(
+                "LinkedIn needs attention.\n\n"
+                f"Details: {reason or 'session expired'}\n\n"
+                "cd ~/apps/devops-job-agent && source .venv/bin/activate && "
+                "python3 run_orchestrator.py linkedin-bootstrap --email YOUR_EMAIL\n"
+            )
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(email_user, email_pass)
             s.send_message(msg)

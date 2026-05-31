@@ -352,10 +352,17 @@ def _wants_help(text: str) -> bool:
     return t in ("help", "menu", "?", "עזרה", "תפריט", "помощь", "меню")
 
 
+def _leading_menu_digit(text: str) -> str:
+    """First line menu command (1/2) even when mobile clients append signature underscores."""
+    t = _normalized_reply(text).lower().strip()
+    m = re.match(r"^(\d)\b", t)
+    return m.group(1) if m else ""
+
+
 def _wants_same_data(text: str) -> bool:
     t = _normalized_reply(text).lower()
     full = strip_email_signature(strip_quoted_reply(text)).lower()
-    if t in ("1", "same", "yes", "כן", "אותו דבר"):
+    if _leading_menu_digit(text) == "1" or t in ("1", "same", "yes", "כן", "אותו דבר"):
         return True
     return any(
         p in full
@@ -374,7 +381,7 @@ def _wants_same_data(text: str) -> bool:
 def _wants_new_data(text: str) -> bool:
     t = _normalized_reply(text).lower()
     full = strip_email_signature(strip_quoted_reply(text)).lower()
-    if t in ("2", "new"):
+    if _leading_menu_digit(text) == "2" or t in ("2", "new"):
         return True
     return any(p in full for p in ("new search", "new cv", "new keywords"))
 

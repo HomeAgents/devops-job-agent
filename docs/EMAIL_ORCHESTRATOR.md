@@ -17,11 +17,13 @@ Tag: **`pre-email-orchestrator-v1`** @ `64ed025`.
 | Component | Role |
 |-----------|------|
 | `run_orchestrator.py poll-inbox` | IMAP unseen mail → conversation → optional job run |
-| `run_orchestrator.py daily` | 09:00 batch from DB (`schedule_days`) |
+| `run_orchestrator.py daily` | 09:00 and 15:00 batches from DB (`schedule_days`); Mac catch-up via LaunchAgent |
 | `orchestrator/user_db.py` | SQLite profiles per email |
 | `orchestrator/conversation.py` | State machine + replies |
 | `orchestrator/job_runner.py` | Per-user config + `run.py` (or Docker) |
-| `scripts/run-daily-jobs.sh` | Single master cron entry |
+| `scripts/run-daily-jobs.sh` | Cron at 09:05 and 15:05; marks two-slot state |
+| `scripts/orchestrator-daily-catchup.sh` | LaunchAgent tick (30 min); missed morning/evening catch-up |
+| `scripts/install-mac-job-agent-schedule.sh` | Install cron + LaunchAgent (like ScoutSignal) |
 | `scripts/poll-inbox.sh` | Every 5 min while VM is up |
 
 ## VM crontab (one file)
@@ -30,7 +32,7 @@ Tag: **`pre-email-orchestrator-v1`** @ `64ed025`.
 bash scripts/install-orchestrator-cron.sh
 ```
 
-- **09:00** — all users due today (DB `schedule_days`)
+- **09:05** and **15:05** — all users due today (DB `schedule_days`); if the Mac slept, `com.devops-job-agent.daily-two-slot` catches up from 09:00 / 15:00 windows
 - **\*/5** — poll inbox, reset idle timer, stop VM after 15 min quiet (`ORCHESTRATOR_VM_AUTOSTOP=1`)
 - **19:00** — birthday / scoutsignal (existing)
 

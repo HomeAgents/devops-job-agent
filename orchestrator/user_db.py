@@ -226,6 +226,7 @@ class UserDB:
 
     def users_due_today(self, weekday: int) -> list[UserRecord]:
         """weekday: 0=Sunday … 6=Saturday (datetime.weekday()+1 % 7 for Sun=0)."""
+        default_weekdays = [0, 1, 2, 3, 4]  # Sun–Thu Israel work week
         out: list[UserRecord] = []
         with self.connect() as conn:
             rows = conn.execute(
@@ -233,9 +234,12 @@ class UserDB:
             ).fetchall()
         for row in rows:
             user = self._row_to_user(row)
-            if not user.schedule_days:
+            days = user.schedule_days
+            if not days and user.state in ("scheduled", "report_sent"):
+                days = default_weekdays
+            if not days:
                 continue
-            if weekday in user.schedule_days:
+            if weekday in days:
                 out.append(user)
         return out
 
@@ -396,6 +400,9 @@ class UserDB:
 def parse_schedule_days(text: str) -> list[int]:
     t = text.strip().lower()
     if not t:
+        return []
+    # Menu commands "1" / "2" are not weekday numbers (mobile signatures add junk after the digit).
+    if re.fullmatch(r"\d\s*[_\W]*", t) or t in ("1", "2"):
         return []
     exclude: set[int] = set()
     m = re.search(r"(?:except|excluding|but not|without|expect)\s+(\w+)", t)

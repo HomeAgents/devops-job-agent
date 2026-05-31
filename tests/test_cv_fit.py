@@ -62,7 +62,7 @@ def test_compute_cv_fit_greenhouse_job(tmp_path: Path):
     assert 40 <= pct <= 100
 
 
-def test_compute_cv_fit_na_without_description():
+def test_compute_cv_fit_linkedin_fallback_without_description():
     job = Job(
         source="linkedin_browser",
         company="X",
@@ -72,7 +72,9 @@ def test_compute_cv_fit_na_without_description():
         raw={},
     )
     cfg = {"cv_fit": {"min_job_text_chars": 200}}
-    assert compute_cv_fit_percent("devops kubernetes terraform", job, cfg) is None
+    pct = compute_cv_fit_percent("devops kubernetes terraform", job, cfg)
+    assert pct is not None
+    assert 0 <= pct <= 100
 
 
 def test_enrich_dataframe(tmp_path: Path):

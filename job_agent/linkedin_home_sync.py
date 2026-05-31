@@ -269,32 +269,66 @@ def resolve_linkedin_home_sync(cfg: Dict[str, Any]) -> Tuple[List[Job], str, boo
     return jobs, msg, skip_vm
 
 
+def _home_sync_missing_alert_path(cfg: Dict[str, Any]) -> Path:
+    """One admin alert per day; shared LinkedIn uses a global marker, not per-subscriber."""
+    try:
+        from orchestrator.linkedin_shared_session import shared_home_linkedin_enabled
+    except ImportError:
+        shared_home_linkedin_enabled = lambda: False  # type: ignore
+
+    if shared_home_linkedin_enabled():
+        return Path.home() / ".job-agent" / ".home-sync-missing-alert-sent"
+    return home_sync_path(cfg).parent / ".home-sync-alert-sent"
+
+
 def maybe_alert_missing_home_sync(cfg: Dict[str, Any], detail: str) -> None:
-    """Email once per day when home sync is required but missing."""
+    """Email admin once per day when home sync is required but missing (never subscribers)."""
     if not home_sync_enabled(cfg) or not disable_vm_linkedin_browser(cfg):
         return
     block = _home_sync_block(cfg)
     if block.get("alert_on_missing", True) is False:
         return
+    from orchestrator.linkedin_alerts import orchestrator_notify_email
+
+    if not orchestrator_notify_email():
+        return
     user = str(cfg.get("_user_email") or "user").strip()
-    path = home_sync_path(cfg).parent / ".home-sync-alert-sent"
+    path = _home_sync_missing_alert_path(cfg)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
         if path.is_file() and path.read_text(encoding="utf-8").strip() == today:
             return
     except OSError:
         pass
+    try:
+        from orchestrator.linkedin_shared_session import (
+            linkedin_session_owner_email,
+            shared_home_linkedin_enabled,
+        )
+    except ImportError:
+        shared_home_linkedin_enabled = lambda: False  # type: ignore
+        linkedin_session_owner_email = lambda: ""  # type: ignore
+
+    if shared_home_linkedin_enabled():
+        owner = linkedin_session_owner_email() or "session owner"
+        reason = (
+            f"Shared LinkedIn home sync missing or stale (noticed during digest for {user}). "
+            f"VM LinkedIn is off (datacenter IP blocked). "
+            f"Cron will retry; digests use Greenhouse/ATS until sync succeeds. "
+            f"Admin: run linkedin-bootstrap + linkedin-home-sync on home Mac for {owner}. ({detail})"
+        )
+    else:
+        reason = (
+            f"Home LinkedIn sync missing for {user}. "
+            f"VM LinkedIn is off (datacenter IP blocked). "
+            f"Worker Mac will retry on cron; digests use Greenhouse/ATS until sync succeeds. "
+            f"Admin: bootstrap session for this user once. ({detail})"
+        )
     from job_agent.browser.session import send_linkedin_alert_once
 
-    send_linkedin_alert_once(
-        cfg,
-        reason=(
-            f"Home LinkedIn sync missing for {user}. "
-            f"VM LinkedIn is turned off (Azure IP blocked). "
-            f"On Mac: USER_EMAIL={user} ./scripts/linkedin-home-worker.sh — {detail}"
-        ),
-    )
+    send_linkedin_alert_once(cfg, reason=reason)
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(today, encoding="utf-8")
     except OSError:
         pass
@@ -309,7 +343,13 @@ def fetch_and_export_linkedin_for_home(cfg: Dict[str, Any], out_path: Path) -> i
     from job_agent.sources.linkedin_posts_browser import fetch_linkedin_posts
 
     os.environ["LINKEDIN_HOME_EXPORT"] = "1"
+    from job_agent.sources.linkedin_browser import jobs_search_queries
+
+    queries = jobs_search_queries(cfg)
     search_url = build_linkedin_jobs_search_url(cfg)
+    search_urls = [
+        build_linkedin_jobs_search_url(cfg, keywords=q) for q in queries
+    ] if len(queries) > 1 else [search_url]
     jobs: List[Job] = []
     try:
         jobs.extend(fetch_linkedin_jobs(cfg))
@@ -323,14 +363,26 @@ def fetch_and_export_linkedin_for_home(cfg: Dict[str, Any], out_path: Path) -> i
         for job in jobs:
             raw = job.raw if isinstance(job.raw, dict) else {}
             job.raw = {**raw, "_home_sync": True, "search_url": search_url}
-        export_linkedin_jobs(
-            out_path,
-            jobs,
-            meta={
-                "host": os.uname().nodename if hasattr(os, "uname") else "home",
-                "search_url": search_url,
-            },
-        )
+        meta_export: Dict[str, Any] = {
+            "host": os.uname().nodename if hasattr(os, "uname") else "home",
+            "search_url": search_url,
+            "search_urls": search_urls,
+            "search_queries": queries,
+            "multi_search": len(queries) > 1,
+            "subscriber_email": str(cfg.get("_user_email") or "").strip().lower(),
+        }
+        try:
+            from orchestrator.linkedin_shared_session import (
+                linkedin_session_owner_email,
+                shared_home_linkedin_enabled,
+            )
+
+            if shared_home_linkedin_enabled():
+                meta_export["linkedin_shared_session"] = True
+                meta_export["linkedin_session_owner"] = linkedin_session_owner_email()
+        except ImportError:
+            pass
+        export_linkedin_jobs(out_path, jobs, meta=meta_export)
         return 0 if jobs else 1
     finally:
         os.environ.pop("LINKEDIN_HOME_EXPORT", None)

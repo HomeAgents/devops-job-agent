@@ -615,8 +615,19 @@ def _quote_linkedin_term(term: str) -> str:
 
 
 def normalize_linkedin_keywords(raw: str, *, location: str = "Israel") -> str:
-    """Strip a trailing location suffix from legacy approved queries."""
+    """Strip a trailing location suffix; LinkedIn UI pipes → OR for jobs search URL."""
     s = (raw or "").strip()
+    if "|" in s:
+        parts = [p.strip() for p in s.split("|") if p.strip()]
+        if parts:
+            quoted = []
+            for p in parts:
+                p = p.strip().strip('"')
+                if " OR " in p.upper():
+                    quoted.append(p)
+                else:
+                    quoted.append(f'"{p}"')
+            s = " OR ".join(quoted)
     loc = (location or "").strip()
     if loc and s.lower().endswith(loc.lower()):
         s = s[: -len(loc)].strip()

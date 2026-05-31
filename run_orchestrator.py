@@ -22,7 +22,7 @@ from orchestrator.conversation import ConversationEngine
 from orchestrator.email_client import fetch_inbound
 from orchestrator.email_filters import ignore_reason, is_ignored_inbound
 from orchestrator.job_runner import data_root, run_docker_job, run_job_for_user
-from orchestrator.user_db import UserDB
+from orchestrator.user_db import UserDB, sanitize_email
 from orchestrator.vm_lifecycle import ensure_vm_started, maybe_stop_vm, touch_activity
 
 
@@ -181,6 +181,64 @@ def cmd_admin_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_linkedin_home_sync(_args: argparse.Namespace) -> int:
+    """Run home LinkedIn export for every orchestrator user (home worker Mac)."""
+    import subprocess
+
+    script = _ROOT / "scripts" / "linkedin-home-workers-all.sh"
+    if not script.is_file():
+        print(f"Missing {script}", file=sys.stderr)
+        return 1
+    proc = subprocess.run(["/bin/bash", str(script)], cwd=str(_ROOT))
+    return int(proc.returncode)
+
+
+def cmd_linkedin_bootstrap(args: argparse.Namespace) -> int:
+    """Admin: open browser once to save LinkedIn session for a user (home worker profile)."""
+    from orchestrator.job_runner import build_user_config, project_root as root
+    from orchestrator.linkedin_credentials import apply_linkedin_env_for_user
+
+    db = _db()
+    user = db.get_or_create(args.email)
+    base = Path(os.getenv("ORCHESTRATOR_BASE_CONFIG", str(root() / "config.json")))
+    if not base.is_file():
+        base = root() / "config.browser.example.json"
+    cfg_path = build_user_config(user, base)
+    from orchestrator.linkedin_shared_session import (
+        home_browser_profile_dir,
+        linkedin_session_owner_email,
+        shared_home_linkedin_enabled,
+    )
+
+    owner = linkedin_session_owner_email() if shared_home_linkedin_enabled() else user.email
+    if not owner:
+        owner = user.email
+    browser = home_browser_profile_dir(user.email)
+    browser.mkdir(parents=True, exist_ok=True)
+    ou = db.get_or_create(owner)
+    apply_linkedin_env_for_user(owner, meta=ou.meta)
+    safe = sanitize_email(user.email)
+
+    import json
+
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg.setdefault("browser", {})["user_data_dir"] = str(browser)
+    tmp = Path(f"/tmp/job-agent-bootstrap-{safe}.json")
+    tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    os.environ["JOB_AGENT_CONFIG"] = str(tmp)
+    from job_agent.browser.session import open_linkedin_login
+
+    ok = open_linkedin_login(cfg, wait_minutes=max(1, int(args.wait_minutes)))
+    if ok:
+        notify = Path.home() / ".job-agent" / "linkedin-notify-email.txt"
+        try:
+            notify.parent.mkdir(parents=True, exist_ok=True)
+            notify.write_text(owner.strip().lower() + "\n", encoding="utf-8")
+        except OSError:
+            pass
+    return 0 if ok else 1
+
+
 def cmd_cleanup_mailbox(args: argparse.Namespace) -> int:
     from orchestrator.email_client import cleanup_mailbox
 
@@ -218,6 +276,14 @@ def main(argv: list[str] | None = None) -> int:
     p_report.add_argument("--days", type=int, default=0, help="Limit to last N days (0=all)")
     p_report.add_argument("--user", type=str, default="", help="Filter by user email")
     p_report.set_defaults(func=cmd_admin_report)
+
+    p_li = sub.add_parser("linkedin-home-sync", help="Home Mac: sync LinkedIn for all orchestrator users")
+    p_li.set_defaults(func=cmd_linkedin_home_sync)
+
+    p_boot = sub.add_parser("linkedin-bootstrap", help="Admin: manual LinkedIn login for one user (home profile)")
+    p_boot.add_argument("--email", required=True)
+    p_boot.add_argument("--wait-minutes", type=int, default=10)
+    p_boot.set_defaults(func=cmd_linkedin_bootstrap)
 
     p_clean = sub.add_parser("cleanup-mailbox", help="Delete old emails from Gmail folders")
     p_clean.add_argument("--days", type=int, default=7, help="Delete emails older than N days (default 7)")

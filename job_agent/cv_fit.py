@@ -206,6 +206,11 @@ def job_description_text(job: Job, cfg: Dict[str, Any], *, db_conn=None) -> str:
     combined = strip_html("\n".join(p for p in parts if p))
     combined = re.sub(r"\s+", " ", combined).strip()
     if len(combined) < min_chars:
+        # LinkedIn sometimes hides/snips description text in anonymous/public responses.
+        # For those rows, fallback to title/company/location text so CV fit is not NA.
+        src = (job.source or "").strip().lower()
+        if src in ("linkedin_browser", "linkedin_home_sync") and len(combined) >= 20:
+            return combined[:max_chars]
         return ""
     result = combined[:max_chars]
     if db_conn and job.link and result:
@@ -241,7 +246,8 @@ def compute_cv_fit_percent(cv_text: str, job: Job, cfg: Dict[str, Any]) -> Optio
     job_terms = _terms_in_text(terms, job_blob)
     matched = cv_terms & job_terms
     if not matched:
-        return None
+        # Description exists, but no overlap with CV vocabulary -> explicit 0% fit.
+        return 0
 
     block = cfg.get("cv_fit") if isinstance(cfg.get("cv_fit"), dict) else {}
     mode = str(block.get("scoring_mode") or "job_coverage").strip().lower()

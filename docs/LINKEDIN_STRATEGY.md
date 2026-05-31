@@ -31,7 +31,7 @@ USER_EMAIL=you@gmail.com ./scripts/linkedin-home-worker.sh
 
 1. Mac was asleep at 08:25 → run worker manually.
 2. Stale file → still used up to **36h** (stale fallback); re-run worker for fresh jobs.
-3. Amnon needs **his own** Mac login (separate browser profile under `~/.job-agent/home-users/...`).
+3. **Shared session (default):** one LinkedIn login on the home Mac (`ORCHESTRATOR_LINKEDIN_OWNER_EMAIL`) runs **keyword search** for every orchestrator user; results are saved per user. Subscribers do not need their own LinkedIn.
 
 ## Mac on power 24/7 (screen off OK, do not sleep system)
 

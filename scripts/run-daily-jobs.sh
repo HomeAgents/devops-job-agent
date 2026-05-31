@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Master daily trigger (09:00 Asia/Jerusalem). Per-user days live in orchestrator DB.
+# Cron entry: run orchestrator daily at 09:xx / 15:xx and mark two-slot state on success.
 set -euo pipefail
-export TZ=Asia/Jerusalem
+export TZ="${TZ:-Asia/Jerusalem}"
 ROOT="${HOME}/apps/devops-job-agent"
-LOG="${HOME}/logs/orchestrator-daily-$(date +%Y%m%d).log"
-mkdir -p "${HOME}/logs"
-cd "$ROOT"
-[ -d .venv ] && . .venv/bin/activate
-[ -f .env ] && set -a && . .env && set +a
-[ -f orchestrator.env ] && set -a && . orchestrator.env && set +a
-echo "[$(date '+%H:%M:%S')] daily start" | tee -a "$LOG"
-python3 run_orchestrator.py daily >>"$LOG" 2>&1
-echo "[$(date '+%H:%M:%S')] daily done" | tee -a "$LOG"
+if [ ! -d "$ROOT" ]; then
+  ROOT="${HOME}/devops-job-agent"
+fi
+hour=$(date +%H)
+if [ "$hour" -lt 15 ]; then
+  export JOB_AGENT_SLOT=morning
+else
+  export JOB_AGENT_SLOT=afternoon
+fi
+if "${ROOT}/scripts/run-daily-jobs-once.sh"; then
+  "${ROOT}/scripts/mark-orchestrator-daily-slot.sh" "$JOB_AGENT_SLOT"
+  exit 0
+fi
+exit 1

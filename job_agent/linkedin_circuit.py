@@ -50,8 +50,14 @@ def circuit_state_path(cfg: Dict[str, Any]) -> Path:
     if explicit:
         p = Path(explicit).expanduser()
     else:
-        data = os.getenv("ORCHESTRATOR_DATA_DIR", str(Path.home() / "orchestrator-data"))
-        p = Path(data) / ".linkedin-circuit.json"
+        data = Path(os.getenv("ORCHESTRATOR_DATA_DIR", str(Path.home() / "orchestrator-data")))
+        user = str(cfg.get("_user_email") or "").strip().lower()
+        if user:
+            from orchestrator.user_db import sanitize_email
+
+            p = data / "users" / sanitize_email(user) / ".linkedin-circuit.json"
+        else:
+            p = data / ".linkedin-circuit.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -172,7 +178,13 @@ def note_linkedin_fetch_result(
     if open_ and not state.get("alert_sent_for_open"):
         from job_agent.browser.session import send_linkedin_alert_once
 
-        send_linkedin_alert_once(cfg, reason=reason or "repeated failures")
+        try:
+            from orchestrator.linkedin_alerts import format_linkedin_alert_body
+
+            body = format_linkedin_alert_body(reason=reason or "repeated failures")
+        except ImportError:
+            body = ""
+        send_linkedin_alert_once(cfg, reason=reason or "repeated failures", body=body)
         state = _load_state(path)
         state["alert_sent_for_open"] = True
         _save_state(path, state)

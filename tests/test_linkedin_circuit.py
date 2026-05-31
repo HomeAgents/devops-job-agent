@@ -39,6 +39,21 @@ def test_circuit_opens_after_three_failures(tmp_path: Path) -> None:
     assert open_
 
 
+def test_circuit_state_is_per_user(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    data = tmp_path / "orch"
+    monkeypatch.setenv("ORCHESTRATOR_DATA_DIR", str(data))
+    cfg_a = {"_user_email": "alice@example.com", "linkedin": {"circuit_breaker": {"enabled": True}}}
+    cfg_b = {"_user_email": "bob@example.com", "linkedin": {"circuit_breaker": {"enabled": True}}}
+    assert "alice_example.com" in str(circuit_state_path(cfg_a))
+    assert "bob_example.com" in str(circuit_state_path(cfg_b))
+    note_linkedin_fetch_result(cfg_a, jobs_count=0, reason="auth_wall")
+    note_linkedin_fetch_result(cfg_b, jobs_count=5)
+    assert json.loads(circuit_state_path(cfg_a).read_text())["failure_count"] == 1
+    assert json.loads(circuit_state_path(cfg_b).read_text())["failure_count"] == 0
+
+
 def test_success_resets_failures(tmp_path: Path) -> None:
     cfg = {
         "linkedin": {
