@@ -86,9 +86,33 @@ def format_linkedin_alert_body(*, reason: str = "") -> str:
     return "\n".join(lines)
 
 
+def _home_sync_has_recent_jobs(cfg: Dict[str, Any]) -> bool:
+    """True when Mac home sync file is fresh and non-empty (session clearly worked)."""
+    try:
+        from job_agent.linkedin_home_sync import (
+            home_sync_enabled,
+            home_sync_is_fresh,
+            load_home_sync_jobs,
+        )
+    except ImportError:
+        return False
+    if not home_sync_enabled(cfg) or not home_sync_is_fresh(cfg):
+        return False
+    jobs, _msg = load_home_sync_jobs(cfg)
+    return bool(jobs)
+
+
 def maybe_alert_linkedin_session_expired(cfg: Dict[str, Any], reason: str) -> None:
     """Email admin at most once per day when home sync hits auth wall / expiry."""
     if not _reason_indicates_session_lost(reason):
+        return
+    if _home_sync_has_recent_jobs(cfg):
+        import sys
+
+        print(
+            "LinkedIn session alert suppressed: home sync is fresh with jobs",
+            file=sys.stderr,
+        )
         return
     path = Path.home() / ".job-agent" / ".linkedin-session-alert-sent"
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

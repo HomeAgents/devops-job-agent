@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from orchestrator.linkedin_alerts import (
+    _home_sync_has_recent_jobs,
     _reason_indicates_session_lost,
     format_linkedin_alert_body,
     linkedin_restore_command_block,
@@ -25,6 +28,34 @@ def test_notify_email_uses_admin_env(monkeypatch) -> None:
     monkeypatch.setenv("ORCHESTRATOR_ADMIN_EMAIL", "admin@example.com")
     monkeypatch.setenv("EMAIL_TO", "subscriber@example.com")
     assert orchestrator_notify_email() == "admin@example.com"
+
+
+def test_home_sync_recent_jobs_suppresses_false_alarm(tmp_path, monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    sync = tmp_path / "jobs.json"
+    sync.write_text(
+        json.dumps(
+            {
+                "exported_at": datetime.now(timezone.utc).isoformat(),
+                "jobs": [
+                    {
+                        "link": "https://linkedin.com/jobs/view/1/",
+                        "title": "DevOps Manager",
+                        "company": "Co",
+                        "location": "Israel",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = {
+        "linkedin": {
+            "home_sync": {"enabled": True, "import_path": str(sync), "max_age_hours": 48}
+        }
+    }
+    assert _home_sync_has_recent_jobs(cfg)
 
 
 def test_alert_body_has_exact_commands(monkeypatch) -> None:

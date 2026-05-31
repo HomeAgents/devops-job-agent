@@ -176,12 +176,37 @@ def note_linkedin_fetch_result(
 
     open_, _ = linkedin_circuit_status(cfg)
     if open_ and not state.get("alert_sent_for_open"):
+        try:
+            from orchestrator.linkedin_alerts import (
+                _home_sync_has_recent_jobs,
+                _reason_indicates_session_lost,
+                format_linkedin_alert_body,
+            )
+
+            if _home_sync_has_recent_jobs(cfg):
+                import sys
+
+                print(
+                    "LinkedIn circuit alert suppressed: home sync is fresh with jobs",
+                    file=sys.stderr,
+                )
+                state["alert_sent_for_open"] = True
+                _save_state(path, state)
+                return
+        except ImportError:
+            pass
         from job_agent.browser.session import send_linkedin_alert_once
 
         try:
             from orchestrator.linkedin_alerts import format_linkedin_alert_body
 
-            body = format_linkedin_alert_body(reason=reason or "repeated failures")
+            lost = _reason_indicates_session_lost(reason or "")
+            body = (
+                format_linkedin_alert_body(reason=reason or "repeated failures")
+                if lost
+                else f"LinkedIn browser skipped after repeated failures ({reason or 'unknown'}). "
+                "Digests still use home sync / Greenhouse. Re-run linkedin-home-sync on the Mac when convenient."
+            )
         except ImportError:
             body = ""
         send_linkedin_alert_once(cfg, reason=reason or "repeated failures", body=body)
