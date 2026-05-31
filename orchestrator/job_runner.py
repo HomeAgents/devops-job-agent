@@ -76,7 +76,9 @@ def _sync_google_search_from_linkedin(cfg: dict[str, Any], keywords: str, locati
             sc["keywords"] = existing
 
 
-def build_user_config(user: UserRecord, base_config_path: Path) -> Path:
+def build_user_config(
+    user: UserRecord, base_config_path: Path, db: UserDB | None = None
+) -> Path:
     work = user_work_dir(user)
     cfg = json.loads(base_config_path.read_text(encoding="utf-8"))
     cfg = deepcopy(cfg)
@@ -104,6 +106,12 @@ def build_user_config(user: UserRecord, base_config_path: Path) -> Path:
         if len(parts) > 1:
             js["multi_search"] = True
             js["queries"] = parts[:cap]
+            if db is not None:
+                meta = dict(user.meta)
+                meta["linkedin_search_queries"] = parts[:cap]
+                if meta.get("approved_keyword_query") != keywords_raw:
+                    meta.pop("approved_keyword_query", None)
+                db.update_user(user.id, meta=meta)
     else:
         saved = work / "config.json"
         if saved.is_file():
@@ -237,7 +245,7 @@ def run_job_for_user(user: UserRecord, db: UserDB, *, dry_run: bool = False) -> 
     base = Path(os.getenv("ORCHESTRATOR_BASE_CONFIG", str(root / "config.json")))
     if not base.exists():
         base = root / "config.browser.example.json"
-    config_path = build_user_config(user, base)
+    config_path = build_user_config(user, base, db)
     work = user_work_dir(user)
     db_path = work / "jobs.db"
 

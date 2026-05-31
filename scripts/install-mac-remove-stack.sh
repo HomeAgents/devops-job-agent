@@ -19,7 +19,22 @@ install_plist() {
 }
 
 install_plist "${ROOT}/extras/com.job-agent.remove-server.example.plist" "com.job-agent.remove-server"
-install_plist "${ROOT}/extras/com.job-agent.cloudflared-remove.example.plist" "com.job-agent.cloudflared-remove"
+
+launchctl bootout "gui/$(id -u)/com.job-agent.cloudflared-remove" 2>/dev/null || true
+launchctl bootout "gui/$(id -u)/com.job-agent.cloudflared-named" 2>/dev/null || true
+if [ -f "${ROOT}/.env" ]; then
+  set -a && . "${ROOT}/.env" && set +a
+fi
+if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
+  dst="${LA}/com.job-agent.cloudflared-named.plist"
+  sed "s|/Users/arkadiykats|${HOME}|g; s|CLOUDFLARE_TUNNEL_TOKEN_PLACEHOLDER|${CLOUDFLARE_TUNNEL_TOKEN}|" \
+    "${ROOT}/extras/com.job-agent.cloudflared-named.example.plist" >"$dst"
+  launchctl bootstrap "gui/$(id -u)" "$dst"
+  echo "Loaded com.job-agent.cloudflared-named (stable tunnel)"
+else
+  install_plist "${ROOT}/extras/com.job-agent.cloudflared-remove.example.plist" "com.job-agent.cloudflared-remove"
+  echo "Loaded com.job-agent.cloudflared-remove (quick tunnel — URL may change on reboot)"
+fi
 
 sleep 4
 "${ROOT}/scripts/sync-remove-base-url.sh" || true

@@ -12,6 +12,7 @@ TMP=$(mktemp)
   echo "0 9,19 * * * cd ${BIRTHDAY} && ./scripts/morning-agents-mac.sh >>${HOME}/logs/morning.log 2>&1"
   echo "0 9,17 * * * cd ${BIRTHDAY} && ./scripts/run-scoutsignal.sh >>${HOME}/logs/scoutsignal.log 2>&1"
   echo "5 9,15 * * * cd ${ROOT} && ./scripts/run-daily-jobs.sh >>${HOME}/logs/orchestrator-daily.log 2>&1"
+  echo "20 9,15 * * * cd ${ROOT} && ./scripts/check-orchestrator-health.sh >>${HOME}/logs/orchestrator-health.log 2>&1"
   echo "*/5 * * * * cd ${ROOT} && ./scripts/poll-inbox.sh >>${HOME}/logs/orchestrator-poll.log 2>&1"
 } > "$TMP"
 crontab "$TMP"
