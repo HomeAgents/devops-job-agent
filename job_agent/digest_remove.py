@@ -745,9 +745,39 @@ def _spawn_detached_remove_server(cfg: Dict[str, Any]) -> bool:
     return False
 
 
+def _kill_stale_listeners_on_port(port: int) -> None:
+    """Avoid duplicate servers (localhost + 0.0.0.0) breaking cloudflared → origin."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    pids = [p.strip() for p in (out.stdout or "").split() if p.strip().isdigit()]
+    if len(pids) <= 1:
+        return
+    import os
+
+    me = os.getpid()
+    for pid in pids:
+        if int(pid) == me:
+            continue
+        try:
+            os.kill(int(pid), 9)
+        except OSError:
+            pass
+
+
 def ensure_remove_server_running(cfg: Dict[str, Any]) -> bool:
     if not digest_remove_enabled(cfg):
         return False
+    _, port = remove_listen_host_port(cfg)
+    _kill_stale_listeners_on_port(port)
     if _health_check(cfg) and _server_has_tracker_routes(cfg):
         return True
     if _health_check(cfg) and not _server_has_tracker_routes(cfg):
