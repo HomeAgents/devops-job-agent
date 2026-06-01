@@ -18,4 +18,7 @@ pkill -f "run.py --digest-remove-server" 2>/dev/null || true
 sleep 2
 
 "${ROOT}/scripts/install-mac-remove-stack.sh"
+sleep 3
+"${ROOT}/scripts/sync-remove-base-url.sh"
 echo "Tunnel URL: $(grep '^ORCHESTRATOR_REMOVE_BASE_URL=' "${ROOT}/.env" 2>/dev/null || echo '(not set)')"
+curl -s -o /dev/null -w "Probe /status: HTTP %{http_code}\n" --max-time 12 "$(grep '^ORCHESTRATOR_REMOVE_BASE_URL=' "${ROOT}/.env" | cut -d= -f2-)/status" || true

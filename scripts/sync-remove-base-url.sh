@@ -11,13 +11,14 @@ LOG="${HOME}/logs/digest-remove-cloudflared.log"
 ENV_FILE="${ROOT}/.env"
 
 BASE="${1:-}"
+# Log wins over stale url file (quick tunnel URL changes whenever cloudflared restarts).
+if [ -z "$BASE" ] && [ -f "$LOG" ]; then
+  BASE="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG" | tail -1 || true)"
+fi
 if [ -z "$BASE" ]; then
   if [ -f "$URL_FILE" ]; then
     BASE="$(tr -d '[:space:]' <"$URL_FILE")"
   fi
-fi
-if [ -z "$BASE" ] && [ -f "$LOG" ]; then
-  BASE="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG" | tail -1 || true)"
 fi
 if [ -z "$BASE" ]; then
   echo "No tunnel URL — start cloudflared or pass URL as arg" >&2
