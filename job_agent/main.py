@@ -1099,7 +1099,11 @@ def run(argv: List[str] | None = None) -> int:
         if only_new:
             email_jobs = _finalize_jobs_for_digest(db.load_pending_jobs(conn), cfg)
         elif args.email_all_fetched:
-            email_jobs = _finalize_jobs_for_digest(list(jobs), cfg)
+            # Same as scheduled digest: merge fetch + recent jobs.db, then apply hide list.
+            from_fetch = _finalize_jobs_for_digest(list(jobs), cfg)
+            from_stored = _jobs_for_scheduled_digest(conn, cfg)
+            email_jobs = dedupe_jobs(from_stored + from_fetch)
+            email_jobs = _finalize_jobs_for_digest(email_jobs, cfg)
         else:
             # digest_email_only_new=false: this run's fetch + recent jobs.db rows (restored / still active).
             from_fetch = _finalize_jobs_for_digest(list(jobs), cfg)

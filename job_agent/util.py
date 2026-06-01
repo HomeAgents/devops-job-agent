@@ -35,7 +35,7 @@ def normalize_url(url: str) -> str:
 
 _LINKEDIN_JOB_ID_RE = re.compile(r"linkedin\.com/jobs/view/(?:[^/?#]+-)?(\d+)", re.I)
 _GREENHOUSE_JOB_RE = re.compile(
-    r"boards(?:\.[a-z]{2,3})?\.greenhouse\.io/([^/]+)/jobs/(\d+)",
+    r"(?:boards|job-boards)(?:\.[a-z]{2,3})?\.greenhouse\.io/([^/]+)/jobs/(\d+)",
     re.I,
 )
 _COMEET_POSITION_RE = re.compile(

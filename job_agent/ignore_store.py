@@ -275,11 +275,27 @@ def load_ignore_identities(cfg: Dict[str, Any] | None = None) -> Set[str]:
     return {job_link_identity(link) for link in merge_ignore_links(cfg or {}) if link}
 
 
+def load_stored_ignore_identities(cfg: Dict[str, Any] | None = None) -> Set[str]:
+    """Posting ids from hide-list snapshots (boards vs job-boards URLs, etc.)."""
+    out: Set[str] = set()
+    for rec in load_removed_records(cfg):
+        ident = str(rec.get("link_identity") or "").strip()
+        if ident:
+            out.add(ident)
+        link = str(rec.get("link") or "").strip()
+        if link:
+            out.add(job_link_identity(link))
+    return {x for x in out if x}
+
+
 def is_link_ignored(link: str, cfg: Dict[str, Any] | None = None) -> bool:
     cfg = cfg or {}
     url = normalize_url((link or "").strip())
     if not url:
         return False
+    ident = job_link_identity(url)
+    if ident and ident in load_stored_ignore_identities(cfg):
+        return True
     ignore_urls = merge_ignore_links(cfg)
     if url in ignore_urls:
         return True
