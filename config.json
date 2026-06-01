@@ -137,7 +137,7 @@
     "digest": "DevOps leadership jobs — digest (Israel)",
     "removed": "DevOps leadership jobs — removed (click Restore)"
   },
-  "digest_email_include_removed_table": true,
+  "digest_email_include_removed_table": false,
   "digest_email_collapsible_tables": {
     "enabled": true,
     "sections": {
